@@ -1,0 +1,22 @@
+[package]
+name = "wagyu-core"
+description = "Geometry boolean operations (union, intersection, difference, xor) - Rust port of Mapbox wagyu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+geo = { workspace = true }
+geo-types = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+approx = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

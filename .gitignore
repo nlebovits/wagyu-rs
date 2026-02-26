@@ -1,0 +1,33 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# Test outputs
+tests/fixtures/output/
+
+# Coverage
+tarpaulin-report.html
+cobertura.xml
+lcov.info
+
+# Benchmarks
+target/criterion/
+
+# Mutation testing
+mutants.out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# MkDocs
+site/

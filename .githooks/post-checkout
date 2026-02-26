@@ -1,0 +1,3 @@
+#!/bin/sh
+# Remind about hooks path after checkout
+echo "Tip: Run 'git config core.hooksPath .githooks' to enable hooks"

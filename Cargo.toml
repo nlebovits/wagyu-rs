@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Nissim Lebovits <nlebovits@pm.me>"]
+license = "BSL-1.0"
+repository = "https://github.com/nlebovits/wagyu-rs"
+homepage = "https://github.com/nlebovits/wagyu-rs"
+keywords = ["geometry", "polygon", "clipping", "boolean-operations", "geospatial"]
+categories = ["science", "algorithms", "mathematics"]
+
+[workspace.dependencies]
+# Internal crates
+wagyu-core = { path = "crates/core", version = "0.1.0" }
+
+# Core geometry
+geo = "0.29"
+geo-types = "0.7"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Utilities
+log = "0.4"
+env_logger = "0.11"
+
+# Testing
+approx = "0.5"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.bench]
+inherits = "release"

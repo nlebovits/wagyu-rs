@@ -1,0 +1,44 @@
+site_name: wagyu-rs
+site_description: Geometry boolean operations in Rust (port of Mapbox wagyu)
+site_author: Nissim Lebovits
+site_url: https://nlebovits.github.io/wagyu-rs/
+repo_name: nlebovits/wagyu-rs
+repo_url: https://github.com/nlebovits/wagyu-rs
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+  features:
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Contributing: contributing.md
+  - Changelog: changelog.md
