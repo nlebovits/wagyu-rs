@@ -5,6 +5,10 @@
 //! These enums define the operation modes, fill rules, and internal
 //! edge state used by the Vatti clipping algorithm.
 
+// NOTE: C++ defines `clip_type` here, but we use `Operation` in lib.rs instead.
+// DIVERGENCE FROM WAGYU: We renamed `clip_type` to `Operation` for a more Rust-idiomatic API.
+// The `Operation` enum is exported from lib.rs and used throughout the codebase.
+
 /// Identifies which operand a polygon belongs to in a boolean operation.
 ///
 /// From C++: `enum polygon_type : std::uint8_t { polygon_type_subject = 0, polygon_type_clip };`

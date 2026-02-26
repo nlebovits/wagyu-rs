@@ -14,6 +14,7 @@
 
 use geo_types::{Coord, CoordNum, LineString, MultiPolygon, Polygon};
 
+use crate::point::Point;
 use crate::Ring;
 
 /// A manager for rings during polygon construction.
@@ -27,6 +28,10 @@ pub struct RingManager<T: CoordNum> {
     rings: Vec<Ring<T>>,
     /// Indices of top-level exterior rings (rings with no parent)
     top_level_rings: Vec<usize>,
+    /// Hot pixels for snap rounding (grid points needing special handling)
+    pub hot_pixels: Vec<Point<T>>,
+    /// Current index into hot_pixels during sweep
+    pub current_hp_idx: usize,
 }
 
 impl<T: CoordNum> RingManager<T> {
@@ -35,6 +40,8 @@ impl<T: CoordNum> RingManager<T> {
         RingManager {
             rings: Vec::new(),
             top_level_rings: Vec::new(),
+            hot_pixels: Vec::new(),
+            current_hp_idx: 0,
         }
     }
 
@@ -91,6 +98,56 @@ impl<T: CoordNum> RingManager<T> {
         // Add child to parent's children list
         if let Some(parent) = self.rings.get_mut(parent_index) {
             parent.add_child(child_index);
+        }
+    }
+
+    /// Update the current hot pixel iterator to skip past hot pixels above scanline_y.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - update_current_hp_itr
+    ///
+    /// Hot pixels are sorted by Y descending, so we advance past any with Y > scanline_y.
+    ///
+    /// # Arguments
+    /// * `scanline_y` - The current scanline Y coordinate
+    pub fn update_current_hp_itr(&mut self, scanline_y: T) {
+        while self.current_hp_idx < self.hot_pixels.len() {
+            let hp_y = self.hot_pixels[self.current_hp_idx].y;
+            // Hot pixels are sorted by Y descending (larger Y first)
+            // Skip while hot pixel Y > scanline_y
+            if hp_y > scanline_y {
+                self.current_hp_idx += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Returns an iterator over all ring indices.
+    pub fn ring_indices(&self) -> impl Iterator<Item = usize> {
+        0..self.rings.len()
+    }
+
+    /// Clear a ring's parent reference (used during tree rebuilding).
+    pub fn clear_parent(&mut self, ring_index: usize) {
+        if let Some(ring) = self.rings.get_mut(ring_index) {
+            ring.set_parent(None);
+        }
+    }
+
+    /// Clear a ring's children (used during tree rebuilding).
+    pub fn clear_children(&mut self, ring_index: usize) {
+        if let Some(ring) = self.rings.get_mut(ring_index) {
+            ring.clear_children();
+        }
+    }
+
+    /// Recalculate top-level rings after tree modifications.
+    pub fn recalculate_top_level_rings(&mut self) {
+        self.top_level_rings.clear();
+        for i in 0..self.rings.len() {
+            if self.rings[i].parent().is_none() && !self.rings[i].is_hole() {
+                self.top_level_rings.push(i);
+            }
         }
     }
 }

@@ -128,6 +128,30 @@ impl<T: CoordNum> Bound<T> {
         }
     }
 
+    /// Create a placeholder bound with a degenerate edge.
+    ///
+    /// This is used internally when we need to move bounds out of a LocalMinimum
+    /// and need to leave a valid (but useless) bound in place.
+    ///
+    /// DIVERGENCE FROM WAGYU: C++ uses pointers/references and doesn't need this.
+    /// In Rust, we need ownership transfer, so we create placeholders.
+    pub fn new_empty(poly_type: PolygonType, side: EdgeSide) -> Self {
+        // Create a degenerate edge at origin
+        let origin = Point::new(T::zero(), T::zero());
+        let degenerate_edge = Edge::new(origin, origin);
+
+        Self {
+            edges: vec![degenerate_edge],
+            current_edge_index: 0,
+            current_x: 0.0,
+            poly_type,
+            side,
+            winding_count: 0,
+            winding_count2: 0,
+            ring: None,
+        }
+    }
+
     /// Returns a reference to the currently active edge.
     pub fn current_edge(&self) -> &Edge<T> {
         &self.edges[self.current_edge_index]

@@ -96,9 +96,19 @@ impl<T: CoordNum> Ring<T> {
         self.children.push(child_index);
     }
 
+    /// Clear all children (used during tree rebuilding).
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+
     /// Returns a reference to the ring's points.
     pub fn points(&self) -> &[Coord<T>] {
         &self.points
+    }
+
+    /// Returns a mutable reference to the ring's points.
+    pub fn points_mut(&mut self) -> &mut Vec<Coord<T>> {
+        &mut self.points
     }
 }
 
