@@ -109,6 +109,7 @@ pub fn next_edge_would_be_horizontal<T: CoordNum>(bound: &Bound<T>) -> bool {
 ///
 /// # Returns
 /// Position to resume processing from (typically where the horizontal was)
+#[allow(clippy::too_many_arguments)]
 pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
     horz_bound_pos: usize,
     bounds: &mut [Bound<T>],
@@ -185,6 +186,7 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
 /// From C++: `process_horizontal_right_to_left(scanline_y, horz_bound, ...)`
 ///
 /// Similar to left-to-right but traverses in the opposite direction.
+#[allow(clippy::too_many_arguments)]
 pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
     horz_bound_pos: usize,
     bounds: &mut [Bound<T>],
@@ -266,6 +268,7 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
 /// From C++: `process_horizontal(scanline_y, horz_bound, ...)`
 ///
 /// Dispatches to left-to-right or right-to-left based on edge direction.
+#[allow(clippy::too_many_arguments)]
 pub fn process_horizontal<T: CoordNum + ToPrimitive>(
     horz_bound_pos: usize,
     bounds: &mut [Bound<T>],

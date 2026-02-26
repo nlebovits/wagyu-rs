@@ -275,7 +275,7 @@ mod tests {
     fn test_interrupt_guard_default() {
         interrupt_request();
         {
-            let _guard = InterruptGuard::default();
+            let _guard = InterruptGuard;
         }
         assert!(!is_interrupt_requested());
     }

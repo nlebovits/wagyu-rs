@@ -18,7 +18,7 @@ use crate::build_result::RingManager;
 use crate::config::FillType;
 use crate::intersect_util::process_intersections;
 use crate::local_minimum::{LocalMinimum, LocalMinimumList};
-use crate::local_minimum_util::insert_local_minima_into_ABL;
+use crate::local_minimum_util::insert_local_minima_into_abl;
 use crate::process_horizontal::process_edges_at_top_of_scanbeam;
 use crate::scanbeam::Scanbeam;
 use crate::Operation;
@@ -77,7 +77,7 @@ fn setup_scanbeam<T: CoordNum>(minima_list: &LocalMinimumList<T>, scanbeam: &mut
 ///     insert_local_minima_into_ABL(scanline_y, minima_sorted, current_lm, ...);
 /// }
 /// ```
-pub fn execute_vatti<T: CoordNum + Bounded + ToPrimitive>(
+pub fn execute_vatti<T>(
     minima_list: &mut LocalMinimumList<T>,
     bounds: &mut Vec<Bound<T>>,
     manager: &mut RingManager<T>,
@@ -85,7 +85,7 @@ pub fn execute_vatti<T: CoordNum + Bounded + ToPrimitive>(
     subject_fill_type: FillType,
     clip_fill_type: FillType,
 ) where
-    T: num_traits::NumCast,
+    T: CoordNum + Bounded + ToPrimitive + num_traits::NumCast,
 {
     if minima_list.is_empty() {
         return;
@@ -158,7 +158,7 @@ pub fn execute_vatti<T: CoordNum + Bounded + ToPrimitive>(
         // From C++: insert_local_minima_into_ABL(scanline_y, minima_sorted, current_lm, active_bounds, manager, scanbeam, cliptype, subject_fill_type, clip_fill_type);
         // Next we will add local minima bounds to the active bounds list that are on the local
         // minima queue at this current scanline_y
-        insert_local_minima_into_ABL(
+        insert_local_minima_into_abl(
             scanline_y,
             minima_list,
             &mut current_lm_idx,
@@ -212,6 +212,7 @@ mod tests {
     }
 
     /// Create a triangle local minimum (apex at given height)
+    #[allow(dead_code)]
     fn make_triangle_lm(base_y: i64, apex_x: i64, apex_y: i64) -> LocalMinimum<i64> {
         // Triangle with base at (0, base_y) - (10, base_y) and apex at (apex_x, apex_y)
         let left_bound = make_bound(

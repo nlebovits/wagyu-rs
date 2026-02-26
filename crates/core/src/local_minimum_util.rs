@@ -159,7 +159,7 @@ use num_traits::ToPrimitive;
 /// * `_subject_fill_type` - Fill rule for subject polygons
 /// * `_clip_fill_type` - Fill rule for clip polygons
 #[allow(clippy::too_many_arguments)]
-pub fn insert_local_minima_into_ABL<T: CoordNum + ToPrimitive>(
+pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
     bot_y: T,
     minima_sorted: &mut LocalMinimumList<T>,
     current_lm_idx: &mut usize,

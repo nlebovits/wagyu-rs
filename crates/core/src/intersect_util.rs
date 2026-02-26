@@ -27,9 +27,9 @@ use crate::Operation;
 /// Round a floating-point point to integer coordinates.
 ///
 /// From C++: `round_point<T>(pt)` - rounds using `round_towards_max`
-pub fn round_point<T: CoordNum>(pt: Point<f64>) -> Point<T>
+pub fn round_point<T>(pt: Point<f64>) -> Point<T>
 where
-    T: num_traits::NumCast,
+    T: CoordNum + num_traits::NumCast,
 {
     let x = T::from(pt.x.round()).unwrap_or_else(|| T::zero());
     let y = T::from(pt.y.round()).unwrap_or_else(|| T::zero());
@@ -100,7 +100,7 @@ pub fn get_edge_intersection<T: CoordNum>(e1: &Edge<T>, e2: &Edge<T>) -> Option<
     let t = (s2_x * (p0_y - p2_y) - s2_y * (p0_x - p2_x)) / denom;
 
     // Check if intersection is within both line segments
-    if s >= 0.0 && s <= 1.0 && t >= 0.0 && t <= 1.0 {
+    if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
         let x = p0_x + t * s1_x;
         let y = p0_y + t * s1_y;
         Some(Point::new(x, y))
@@ -134,7 +134,7 @@ pub fn get_current_x<T: CoordNum>(edge: &Edge<T>, y: T) -> f64 {
 fn intersection_compare<T: CoordNum + ToPrimitive>(b1: &Bound<T>, b2: &Bound<T>) -> bool {
     // Returns true if NOT (b1.current_x > b2.current_x AND slopes not equal)
     // i.e., returns false if b1.current_x > b2.current_x and edges aren't parallel
-    !(b1.current_x > b2.current_x && !slopes_equal_edges(b1.current_edge(), b2.current_edge()))
+    b1.current_x <= b2.current_x || slopes_equal_edges(b1.current_edge(), b2.current_edge())
 }
 
 /// Check if two edges have equal slopes.
@@ -153,12 +153,12 @@ fn slopes_equal_edges<T: CoordNum + ToPrimitive>(e1: &Edge<T>, e2: &Edge<T>) -> 
 /// * `ael` - The active edge list
 /// * `bounds` - All bounds
 /// * `intersects` - List to populate with intersection nodes
-pub fn build_intersect_list<T: CoordNum + ToPrimitive>(
+pub fn build_intersect_list<T>(
     ael: &ActiveEdgeList,
     bounds: &[Bound<T>],
     intersects: &mut IntersectList<T>,
 ) where
-    T: num_traits::NumCast,
+    T: CoordNum + ToPrimitive + num_traits::NumCast,
 {
     let len = ael.len();
     if len < 2 {
@@ -436,7 +436,7 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
 /// Main entry point for intersection processing at a scanline.
 ///
 /// From C++: `process_intersections(top_y, active_bounds, cliptype, ...)`
-pub fn process_intersections<T: CoordNum + ToPrimitive>(
+pub fn process_intersections<T>(
     top_y: T,
     bounds: &mut [Bound<T>],
     ael: &mut ActiveEdgeList,
@@ -444,7 +444,7 @@ pub fn process_intersections<T: CoordNum + ToPrimitive>(
     subject_fill_type: FillType,
     clip_fill_type: FillType,
 ) where
-    T: num_traits::NumCast,
+    T: CoordNum + ToPrimitive + num_traits::NumCast,
 {
     if ael.is_empty() {
         return;
