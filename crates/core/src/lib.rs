@@ -21,6 +21,9 @@
 
 pub mod active_edge_list;
 pub mod bound;
+pub mod build_edges;
+pub mod build_local_minima_list;
+pub mod build_result;
 pub mod config;
 pub mod error;
 pub mod intersect;
@@ -28,9 +31,13 @@ pub mod local_minimum;
 pub mod point;
 pub mod ring;
 pub mod scanbeam;
+pub mod snap_rounding;
 
 pub use active_edge_list::ActiveEdgeList;
 pub use bound::{Bound, Edge};
+pub use build_edges::{build_edge_list, slopes_equal, EdgeList};
+pub use build_local_minima_list::{add_linear_ring, add_ring_to_local_minima_list};
+pub use build_result::{build_result, ring_to_linestring, RingManager};
 pub use intersect::{IntersectList, IntersectNode};
 pub use local_minimum::{LocalMinimum, LocalMinimumList};
 pub use point::{Point, Point64, PointF64};

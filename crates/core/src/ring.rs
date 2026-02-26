@@ -95,6 +95,11 @@ impl<T: CoordNum> Ring<T> {
     pub fn add_child(&mut self, child_index: usize) {
         self.children.push(child_index);
     }
+
+    /// Returns a reference to the ring's points.
+    pub fn points(&self) -> &[Coord<T>] {
+        &self.points
+    }
 }
 
 impl<T: CoordFloat> Ring<T> {
