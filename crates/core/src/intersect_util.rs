@@ -154,7 +154,7 @@ fn slopes_equal_edges<T: CoordNum + ToPrimitive>(e1: &Edge<T>, e2: &Edge<T>) -> 
 /// * `bounds` - All bounds
 /// * `intersects` - List to populate with intersection nodes
 pub fn build_intersect_list<T: CoordNum + ToPrimitive>(
-    ael: &mut ActiveEdgeList,
+    ael: &ActiveEdgeList,
     bounds: &[Bound<T>],
     intersects: &mut IntersectList<T>,
 ) where
@@ -165,19 +165,22 @@ pub fn build_intersect_list<T: CoordNum + ToPrimitive>(
         return;
     }
 
-    // Bubble sort with intersection detection
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp
+    // DIVERGENCE FROM WAGYU: The C++ version swaps during build_intersect_list
+    // and then restores the original order before process_intersect_list.
+    // We instead detect intersections without swapping, and let process_intersect_list
+    // do all the swapping. This produces the same final result.
+
+    // Create a copy of bound indices for simulation
+    let mut simulated_order: Vec<usize> = ael.iter().copied().collect();
+
+    // Bubble sort simulation with intersection detection
     let mut swapped = true;
     while swapped {
         swapped = false;
-        for i in 0..len - 1 {
-            let idx1 = match ael.get(i) {
-                Some(idx) => idx,
-                None => continue,
-            };
-            let idx2 = match ael.get(i + 1) {
-                Some(idx) => idx,
-                None => continue,
-            };
+        for i in 0..simulated_order.len() - 1 {
+            let idx1 = simulated_order[i];
+            let idx2 = simulated_order[i + 1];
 
             let b1 = &bounds[idx1];
             let b2 = &bounds[idx2];
@@ -189,8 +192,8 @@ pub fn build_intersect_list<T: CoordNum + ToPrimitive>(
                     let rounded: Point<T> = round_point(pt);
                     intersects.push(IntersectNode::new(rounded, idx1, idx2));
                 }
-                // Swap bounds in AEL
-                ael.swap(i, i + 1);
+                // Swap in simulated order (not in actual AEL)
+                simulated_order.swap(i, i + 1);
                 swapped = true;
             }
         }
@@ -281,9 +284,11 @@ pub fn update_winding_counts<T: CoordNum>(
             std::mem::swap(&mut b1.winding_count, &mut b2.winding_count);
         } else {
             // Non-zero fill type
-            // DIVERGENCE FROM WAGYU: Simplified winding update logic
-            // The C++ code has complex sign handling; we use a simpler approach
-            // that produces equivalent results for most cases.
+            // DIVERGENCE FROM WAGYU: Simplified winding delta derivation
+            // The C++ uses `winding_delta` field from edge direction.
+            // We derive it from EdgeSide, which may differ in edge cases
+            // where side assignments change during algorithm execution.
+            // TODO: Track winding_delta as intrinsic edge property for full parity.
             let b1_delta = if b1.side == EdgeSide::Left { 1 } else { -1 };
             let b2_delta = if b2.side == EdgeSide::Left { 1 } else { -1 };
 
@@ -448,9 +453,9 @@ pub fn process_intersections<T: CoordNum + ToPrimitive>(
     // Update current_x for all bounds at this scanline
     update_current_x(ael, bounds, top_y);
 
-    // Build list of intersections
+    // Build list of intersections (simulates swaps without modifying AEL)
     let mut intersects: IntersectList<T> = IntersectList::new();
-    build_intersect_list(ael, bounds, &mut intersects);
+    build_intersect_list(&*ael, bounds, &mut intersects);
 
     if intersects.is_empty() {
         return;
@@ -714,7 +719,7 @@ mod tests {
         let bounds: Vec<Bound<f64>> = vec![];
         let mut intersects: IntersectList<f64> = IntersectList::new();
 
-        build_intersect_list(&mut ael.clone(), &bounds, &mut intersects);
+        build_intersect_list(&ael.clone(), &bounds, &mut intersects);
 
         assert!(intersects.is_empty());
     }
@@ -726,7 +731,7 @@ mod tests {
         ael.insert(0, &bounds);
         let mut intersects: IntersectList<f64> = IntersectList::new();
 
-        build_intersect_list(&mut ael, &bounds, &mut intersects);
+        build_intersect_list(&ael, &bounds, &mut intersects);
 
         assert!(intersects.is_empty());
     }
@@ -749,7 +754,7 @@ mod tests {
 
         let mut intersects: IntersectList<f64> = IntersectList::new();
 
-        build_intersect_list(&mut ael, &bounds, &mut intersects);
+        build_intersect_list(&ael, &bounds, &mut intersects);
 
         // Parallel bounds don't intersect
         assert!(intersects.is_empty());
@@ -795,7 +800,7 @@ mod tests {
         // The bounds are now out of order (bound 0 has higher x but comes first)
         let mut intersects: IntersectList<f64> = IntersectList::new();
 
-        build_intersect_list(&mut ael, &bounds, &mut intersects);
+        build_intersect_list(&ael, &bounds, &mut intersects);
 
         // Should detect the crossing
         assert!(!intersects.is_empty());

@@ -248,14 +248,14 @@ impl<T: Coord> Wagyu<T> {
 
         let mut manager = RingManager::new();
 
-        // Check for interruptions (ignore errors in stub implementation)
-        let _ = interrupt_check();
+        // Check for interruptions
+        interrupt_check()?;
 
         // Build hot pixels for snap rounding
         build_hot_pixels(&self.minima_list, &mut manager);
 
         // Check for interruptions
-        let _ = interrupt_check();
+        interrupt_check()?;
 
         // Execute the main Vatti sweep algorithm
         execute_vatti(
@@ -268,7 +268,7 @@ impl<T: Coord> Wagyu<T> {
         );
 
         // Check for interruptions
-        let _ = interrupt_check();
+        interrupt_check()?;
 
         // Correct topology for OGC validity
         correct_topology(&mut manager);
