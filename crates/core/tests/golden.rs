@@ -16,7 +16,8 @@ use wagyu_rs::{config::FillType, config::PolygonType, point::Point, wagyu::Wagyu
 /// Format: `[[[x,y], [x,y], ...], [[x,y], ...]]`
 /// First array is rings, each ring is an array of [x,y] coordinate pairs.
 fn load_fixture(path: &Path) -> Vec<Vec<Point<i64>>> {
-    let content = fs::read_to_string(path).expect(&format!("Failed to read fixture: {:?}", path));
+    let content =
+        fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read fixture: {:?}", path));
     let json: Value = serde_json::from_str(&content).expect("Failed to parse JSON");
 
     let mut rings = Vec::new();
@@ -42,7 +43,8 @@ fn load_fixture(path: &Path) -> Vec<Vec<Point<i64>>> {
 ///
 /// Format: `[[[[x,y], ...], ...], ...]` - array of polygons, each polygon is array of rings.
 fn load_expected(path: &Path) -> MultiPolygon<i64> {
-    let content = fs::read_to_string(path).expect(&format!("Failed to read expected: {:?}", path));
+    let content =
+        fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read expected: {:?}", path));
     let json: Value = serde_json::from_str(&content).expect("Failed to parse JSON");
 
     let mut polygons: Vec<GeoPolygon<i64>> = Vec::new();
@@ -82,11 +84,7 @@ fn normalize_result(mp: &MultiPolygon<i64>) -> Vec<Vec<Vec<(i64, i64)>>> {
             .map(|poly| {
                 let mut rings: Vec<Vec<(i64, i64)>> = std::iter::once(poly.exterior())
                     .chain(poly.interiors().iter())
-                    .map(|ring| {
-                        ring.coords()
-                            .map(|c| (c.x as i64, c.y as i64))
-                            .collect::<Vec<_>>()
-                    })
+                    .map(|ring| ring.coords().map(|c| (c.x, c.y)).collect::<Vec<_>>())
                     .collect();
                 // Sort rings within polygon for consistent comparison
                 rings.sort();
