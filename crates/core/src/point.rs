@@ -19,7 +19,7 @@ use geo_types::{Coord, CoordNum};
 /// # Examples
 ///
 /// ```
-/// use wagyu_core::Point;
+/// use wagyu_rs::Point;
 ///
 /// // Create a point using new()
 /// let p1 = Point::new(10, 20);
@@ -45,7 +45,7 @@ impl<T: CoordNum> Point<T> {
     /// # Examples
     ///
     /// ```
-    /// use wagyu_core::Point;
+    /// use wagyu_rs::Point;
     ///
     /// let p = Point::new(3, 4);
     /// assert_eq!(p.x, 3);

@@ -20,7 +20,7 @@ cargo add wagyu-core
 ## Usage
 
 ```rust,ignore
-use wagyu_core::{Operation, /* ... */};
+use wagyu_rs::{Operation, /* ... */};
 
 // Coming soon - API under development
 ```

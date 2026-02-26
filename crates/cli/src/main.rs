@@ -3,7 +3,7 @@
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "wagyu")]
+#[command(name = "wagyu-rs")]
 #[command(about = "Geometry boolean operations (union, intersection, difference, xor)")]
 #[command(version)]
 struct Cli {

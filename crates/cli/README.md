@@ -1,8 +1,10 @@
 # wagyu-rs
 
+> **⚠️ Work in Progress**: This is a WIP port of Wagyu to Rust. Code is generated with Claude; please take it with a grain of salt as I figure it out. --Nissim
+
 [![CI](https://github.com/nlebovits/wagyu-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/nlebovits/wagyu-rs/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/nlebovits/wagyu-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/nlebovits/wagyu-rs)
-[![Crates.io](https://img.shields.io/crates/v/wagyu-core?color=blue)](https://crates.io/crates/wagyu-core)
+[![Crates.io](https://img.shields.io/crates/v/wagyu-rs?color=blue)](https://crates.io/crates/wagyu-rs)
 
 Geometry boolean operations in Rust - port of [Mapbox wagyu](https://github.com/mapbox/wagyu).
 
@@ -24,7 +26,7 @@ cargo add wagyu-core
 ## Usage
 
 ```rust,ignore
-use wagyu_core::{Operation, /* ... */};
+use wagyu_rs::{Operation, /* ... */};
 
 // API under development - see context/ARCHITECTURE.md for porting progress
 ```

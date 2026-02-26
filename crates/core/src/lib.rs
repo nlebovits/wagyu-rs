@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use wagyu_core::{BooleanOp, Operation};
+//! use wagyu_rs::{BooleanOp, Operation};
 //!
 //! let polygon_a = // ...
 //! let polygon_b = // ...

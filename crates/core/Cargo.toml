@@ -1,5 +1,5 @@
 [package]
-name = "wagyu-core"
+name = "wagyu-rs"
 description = "Geometry boolean operations (union, intersection, difference, xor) - Rust port of Mapbox wagyu"
 version.workspace = true
 edition.workspace = true

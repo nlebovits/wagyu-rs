@@ -1,6 +1,6 @@
 [package]
-name = "wagyu"
-description = "CLI for wagyu geometry boolean operations"
+name = "wagyu-rs-cli"
+description = "CLI for wagyu-rs geometry boolean operations"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,11 +12,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [[bin]]
-name = "wagyu"
+name = "wagyu-rs"
 path = "src/main.rs"
 
 [dependencies]
-wagyu-core = { workspace = true }
+wagyu-rs = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 env_logger = { workspace = true }

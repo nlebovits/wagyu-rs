@@ -18,7 +18,7 @@ categories = ["science", "algorithms", "mathematics"]
 
 [workspace.dependencies]
 # Internal crates
-wagyu-core = { path = "crates/core", version = "0.1.0" }
+wagyu-rs = { path = "crates/core", version = "0.1.0" }
 
 # Core geometry
 geo = "0.29"
