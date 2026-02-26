@@ -21,6 +21,10 @@
 
 pub mod error;
 
+// Golden test harness - only compiled for tests
+#[cfg(test)]
+mod golden;
+
 pub use error::WagyuError;
 
 /// Boolean operation types
