@@ -5,6 +5,23 @@
 //! These enums define the operation modes, fill rules, and internal
 //! edge state used by the Vatti clipping algorithm.
 
+/// Type of boolean operation to perform.
+///
+/// From C++: `enum clip_type { clip_type_intersection = 0, clip_type_union, clip_type_difference, clip_type_x_or };`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum ClipType {
+    /// Intersection - area common to both polygons
+    #[default]
+    Intersection = 0,
+    /// Union - combined area of both polygons
+    Union = 1,
+    /// Difference - area of subject not in clip
+    Difference = 2,
+    /// XOR - symmetric difference (in one but not both)
+    Xor = 3,
+}
+
 /// Identifies which operand a polygon belongs to in a boolean operation.
 ///
 /// From C++: `enum polygon_type : std::uint8_t { polygon_type_subject = 0, polygon_type_clip };`
@@ -118,6 +135,35 @@ pub const HIGH_RANGE: i64 = 0x3FFFFFFFFFFFFFFF;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==================== ClipType Tests ====================
+
+    #[test]
+    fn clip_type_has_all_variants() {
+        // From C++: clip_type_intersection = 0, clip_type_union, clip_type_difference, clip_type_x_or
+        let intersection = ClipType::Intersection;
+        let union = ClipType::Union;
+        let difference = ClipType::Difference;
+        let xor = ClipType::Xor;
+
+        // All should be distinct
+        assert_ne!(intersection, union);
+        assert_ne!(union, difference);
+        assert_ne!(difference, xor);
+    }
+
+    #[test]
+    fn clip_type_default_is_intersection() {
+        assert_eq!(ClipType::default(), ClipType::Intersection);
+    }
+
+    #[test]
+    fn clip_type_is_copy_and_debug() {
+        let ct = ClipType::Union;
+        let ct_copy = ct;
+        assert_eq!(ct, ct_copy);
+        let _debug = format!("{:?}", ct);
+    }
 
     // ==================== PolygonType Tests ====================
 

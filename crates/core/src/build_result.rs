@@ -14,6 +14,7 @@
 
 use geo_types::{Coord, CoordNum, LineString, MultiPolygon, Polygon};
 
+use crate::point::Point;
 use crate::Ring;
 
 /// A manager for rings during polygon construction.
@@ -27,6 +28,10 @@ pub struct RingManager<T: CoordNum> {
     rings: Vec<Ring<T>>,
     /// Indices of top-level exterior rings (rings with no parent)
     top_level_rings: Vec<usize>,
+    /// Hot pixels for snap rounding (grid points needing special handling)
+    pub hot_pixels: Vec<Point<T>>,
+    /// Current index into hot_pixels during sweep
+    pub current_hp_idx: usize,
 }
 
 impl<T: CoordNum> RingManager<T> {
@@ -35,6 +40,8 @@ impl<T: CoordNum> RingManager<T> {
         RingManager {
             rings: Vec::new(),
             top_level_rings: Vec::new(),
+            hot_pixels: Vec::new(),
+            current_hp_idx: 0,
         }
     }
 

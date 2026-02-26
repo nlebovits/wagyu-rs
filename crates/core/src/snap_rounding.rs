@@ -281,6 +281,39 @@ where
     )
 }
 
+/// Build the hot pixels list from local minima.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/snap_rounding.hpp - build_hot_pixels
+///
+/// Hot pixels are grid points where edges intersect or where special
+/// handling is needed for snap rounding. This function collects all
+/// such points and sorts them for efficient lookup during the sweep.
+///
+/// # Arguments
+///
+/// * `minima_list` - List of local minima containing polygon edges
+/// * `manager` - Ring manager to store hot pixels in
+///
+/// # Note
+///
+/// This is a stub implementation. The full implementation requires
+/// finding all edge intersection points and adding them to the hot pixels list.
+pub fn build_hot_pixels<T: CoordNum>(
+    _minima_list: &crate::local_minimum::LocalMinimumList<T>,
+    manager: &mut crate::build_result::RingManager<T>,
+) {
+    // TODO: Full implementation should:
+    // 1. Iterate through all edges in minima_list
+    // 2. Find all intersection points between edges
+    // 3. Add each intersection point to manager.hot_pixels
+    // 4. Sort hot_pixels by Y coordinate (then X for ties)
+    //
+    // For now, this is a no-op stub that allows the code to compile.
+    // The algorithm will still work but without snap rounding optimization.
+    manager.hot_pixels.clear();
+    manager.current_hp_idx = 0;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
