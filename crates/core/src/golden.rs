@@ -32,20 +32,7 @@ const FIXTURES_DIR: &str = "../../../wagyu/tests/fixtures";
 /// Path to wagyu C++ expected outputs directory (relative to crate root)
 const EXPECTED_DIR: &str = "../../../wagyu/tests/expected";
 
-/// Fill type for polygon operations
-///
-/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/config.hpp
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FillType {
-    /// Even-odd fill rule
-    EvenOdd,
-    /// Non-zero winding fill rule
-    NonZero,
-    /// Positive winding fill rule
-    Positive,
-    /// Negative winding fill rule
-    Negative,
-}
+// Note: FillType is defined in crate::config - use that instead
 
 /// A ring in JSON format: array of [x, y] coordinate pairs
 type JsonRing = Vec<[i64; 2]>;
