@@ -105,6 +105,23 @@ Output geometry MUST be valid and simple per [OGC standards](http://postgis.net/
 - Correct ring orientations
 - Proper hole containment
 
+### 4. Ownership Strategy
+
+**Use plain `Vec` + `usize` indices for graph structures.**
+
+DO NOT use:
+- `slotmap` or arena allocators
+- `Rc<RefCell<>>` or other interior mutability
+- Raw pointers or unsafe blocks
+
+**Why this approach:**
+- [iOverlay](https://github.com/nickhartjes/ioverlay), a production Rust polygon clipping library, uses this pattern successfully
+- Simpler for a 1:1 port—closer to C++ mental model where pointers become indices
+- No external dependencies needed
+- 148 golden tests will catch any correctness issues
+
+See `context/ARCHITECTURE.md` for detailed rationale.
+
 ## Architecture
 
 ```

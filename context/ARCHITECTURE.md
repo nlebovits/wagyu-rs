@@ -35,11 +35,47 @@ wagyu/include/mapbox/geometry/wagyu/
 └── almost_equal.hpp       # Floating point comparison
 ```
 
+## Ownership Strategy: Vec + Indices
+
+**Decision:** Use plain `Vec<T>` + `usize` indices to represent graph relationships (edges, bounds, rings).
+
+### Why Not Alternatives?
+
+| Approach | Rejected Because |
+|----------|------------------|
+| `Rc<RefCell<>>` | Runtime borrow checking, overhead, harder to debug |
+| `slotmap`/`arena` | External dependency, overkill for this use case |
+| Unsafe raw pointers | Defeats the purpose of Rust's safety guarantees |
+
+### Why Vec + Indices Works
+
+1. **Proven in production**: [iOverlay](https://github.com/iShape-Rust/iOverlay) uses this pattern for polygon clipping
+2. **1:1 mapping**: C++ pointers become indices—straightforward translation
+3. **Zero dependencies**: No external crates needed
+4. **Testable**: 148 golden tests validate correctness regardless of ownership model
+
+### Pattern Example
+
+```rust
+// Instead of C++ pointers:
+// struct Edge { Edge* next; Edge* prev; }
+
+// Use indices into a Vec:
+struct Edge {
+    next: Option<usize>,
+    prev: Option<usize>,
+}
+
+struct EdgeStorage {
+    edges: Vec<Edge>,
+}
+```
+
 ## Known Divergences from wagyu C++
 
 | Area | Rust Approach | C++ Approach | Reason |
 |------|---------------|--------------|--------|
-| Memory | Owned structures | Raw pointers | Rust ownership |
+| Memory | Vec + indices | Raw pointers | Rust ownership (see above) |
 | Templates | Generics | C++ templates | Language difference |
 | - | - | - | (Add as porting progresses) |
 
