@@ -19,6 +19,7 @@
 //! let result = polygon_a.boolean_op(&polygon_b, Operation::Union);
 //! ```
 
+pub mod config;
 pub mod error;
 
 pub use error::WagyuError;
