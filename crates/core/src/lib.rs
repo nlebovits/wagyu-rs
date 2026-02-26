@@ -19,8 +19,15 @@
 //! let result = polygon_a.boolean_op(&polygon_b, Operation::Union);
 //! ```
 
+pub mod bound;
 pub mod config;
 pub mod error;
+pub mod point;
+pub mod ring;
+
+pub use bound::{Bound, Edge};
+pub use point::{Point, Point64, PointF64};
+pub use ring::Ring;
 
 // Golden test harness - only compiled for tests
 #[cfg(test)]
