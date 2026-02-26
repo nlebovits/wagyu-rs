@@ -19,15 +19,23 @@
 //! let result = polygon_a.boolean_op(&polygon_b, Operation::Union);
 //! ```
 
+pub mod active_edge_list;
 pub mod bound;
 pub mod config;
 pub mod error;
+pub mod intersect;
+pub mod local_minimum;
 pub mod point;
 pub mod ring;
+pub mod scanbeam;
 
+pub use active_edge_list::ActiveEdgeList;
 pub use bound::{Bound, Edge};
+pub use intersect::{IntersectList, IntersectNode};
+pub use local_minimum::{LocalMinimum, LocalMinimumList};
 pub use point::{Point, Point64, PointF64};
 pub use ring::Ring;
+pub use scanbeam::Scanbeam;
 
 // Golden test harness - only compiled for tests
 #[cfg(test)]
