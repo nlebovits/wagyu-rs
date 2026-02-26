@@ -1,7 +1,8 @@
 //! Golden test harness for wagyu-rs
 //!
-//! This module loads test fixtures from the original wagyu C++ repository
+//! This module loads test fixtures (originally from the wagyu C++ repository)
 //! and validates that the Rust implementation produces identical results.
+//! Fixtures are bundled in `crates/core/tests/` for self-contained testing.
 //!
 //! ## Fixture Format
 //!
@@ -27,10 +28,10 @@ use crate::Operation;
 use geo_types::{Coord, LineString, MultiPolygon, Polygon};
 use std::path::Path;
 
-/// Path to wagyu C++ fixtures directory (relative to crate root)
-const FIXTURES_DIR: &str = "../../../wagyu/tests/fixtures";
-/// Path to wagyu C++ expected outputs directory (relative to crate root)
-const EXPECTED_DIR: &str = "../../../wagyu/tests/expected";
+/// Path to fixtures directory (relative to crate root)
+const FIXTURES_DIR: &str = "tests/fixtures";
+/// Path to expected outputs directory (relative to crate root)
+const EXPECTED_DIR: &str = "tests/expected";
 
 // Note: FillType is defined in crate::config - use that instead
 
