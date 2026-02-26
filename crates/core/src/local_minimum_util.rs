@@ -130,6 +130,100 @@ pub fn at_edge_top<T: CoordNum + PartialEq>(bound: &Bound<T>, y: T) -> bool {
     bound.current_edge().top.y == y
 }
 
+// ============================================================================
+// Insert Local Minima into ABL (Active Bound List)
+// ============================================================================
+
+use crate::build_result::RingManager;
+use crate::config::FillType;
+use crate::local_minimum::LocalMinimumList;
+use crate::Operation;
+use num_traits::ToPrimitive;
+
+/// Insert local minima at the current scanline into the active bound list.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/active_bound_list.hpp - insert_local_minima_into_ABL
+///
+/// This function processes all local minima that have their Y coordinate equal to bot_y,
+/// initializing them and inserting their bounds into the active edge list.
+///
+/// # Arguments
+/// * `bot_y` - The current scanline Y coordinate
+/// * `minima_sorted` - Sorted list of local minima (by Y descending)
+/// * `current_lm_idx` - Current index into minima_sorted (will be incremented)
+/// * `bounds` - Storage for all bounds
+/// * `ael` - Active edge list
+/// * `_manager` - Ring manager (used for contributing edges - simplified in this port)
+/// * `scanbeam` - Scanbeam for adding edge top Y coordinates
+/// * `_cliptype` - Boolean operation type
+/// * `_subject_fill_type` - Fill rule for subject polygons
+/// * `_clip_fill_type` - Fill rule for clip polygons
+#[allow(clippy::too_many_arguments)]
+pub fn insert_local_minima_into_ABL<T: CoordNum + ToPrimitive>(
+    bot_y: T,
+    minima_sorted: &mut LocalMinimumList<T>,
+    current_lm_idx: &mut usize,
+    bounds: &mut Vec<Bound<T>>,
+    ael: &mut ActiveEdgeList,
+    _manager: &mut RingManager<T>,
+    scanbeam: &mut Scanbeam<T>,
+    _cliptype: Operation,
+    _subject_fill_type: FillType,
+    _clip_fill_type: FillType,
+) {
+    let bot_y_f64 = bot_y.to_f64().unwrap_or(0.0);
+
+    // Process all local minima at the current scanline Y
+    while *current_lm_idx < minima_sorted.len() {
+        let lm_y = minima_sorted[*current_lm_idx].y;
+        let lm_y_f64 = lm_y.to_f64().unwrap_or(0.0);
+
+        // Check if this LM is at the current scanline (bot_y == lm.y)
+        if (lm_y_f64 - bot_y_f64).abs() > f64::EPSILON {
+            break;
+        }
+
+        // Initialize the local minimum
+        // From C++: initialize_lm<T>(current_lm)
+        initialize_lm(&mut minima_sorted[*current_lm_idx]);
+
+        // Take ownership of the bounds from the local minimum
+        // In C++, bounds are referenced; in Rust we move them into the bounds vec
+        let lm = &mut minima_sorted[*current_lm_idx];
+
+        // Extract the bounds - we need to move them out
+        // Create placeholder bounds and swap
+        let left_bound = std::mem::replace(
+            &mut lm.left_bound,
+            Bound::new_empty(crate::config::PolygonType::Subject, EdgeSide::Left),
+        );
+        let right_bound = std::mem::replace(
+            &mut lm.right_bound,
+            Bound::new_empty(crate::config::PolygonType::Subject, EdgeSide::Right),
+        );
+
+        // Insert bounds into bounds vector
+        let left_idx = bounds.len();
+        bounds.push(left_bound);
+        let right_idx = bounds.len();
+        bounds.push(right_bound);
+
+        // Insert into AEL
+        // From C++: insert_lm_left_and_right_bound(left_bound, right_bound, active_bounds, ...)
+        ael.insert_pair(left_idx, right_idx, bounds);
+
+        // Add edge tops to scanbeam
+        // From C++: insert_sorted_scanbeam(scanbeam, (*lb_abl_itr)->current_edge->top.y)
+        let left_top = bounds[left_idx].current_edge().top.y;
+        let right_top = bounds[right_idx].current_edge().top.y;
+        scanbeam.insert(left_top);
+        scanbeam.insert(right_top);
+
+        // Move to next local minimum
+        *current_lm_idx += 1;
+    }
+}
+
 /// Update the current_x of a bound for a given Y coordinate.
 ///
 /// Uses the edge's slope (dx) to calculate the x position at y.
