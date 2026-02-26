@@ -599,7 +599,7 @@ mod tests {
             Edge::new(Point::new(5.0, 10.0), Point::new(0.0, 0.0)),
         ];
 
-        let original_first = edges[0].clone();
+        let original_first = edges[0];
         start_list_on_local_maximum(&mut edges);
 
         // After rotation, the first edge should be different (rotated to start at maximum)
