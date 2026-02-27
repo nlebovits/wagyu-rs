@@ -98,6 +98,11 @@ pub struct Bound<T: CoordNum> {
     /// Winding count for the other polygon type.
     pub winding_count2: i32,
 
+    /// Winding delta: 1 or -1 depending on winding direction, 0 for linestrings.
+    ///
+    /// From C++: `std::int8_t winding_delta; // 1 or -1 depending on winding direction - 0 for linestrings`
+    pub winding_delta: i8,
+
     /// Index to the output ring this bound is contributing to, if any.
     pub ring: Option<usize>,
 }
@@ -124,6 +129,38 @@ impl<T: CoordNum> Bound<T> {
             side,
             winding_count: 0,
             winding_count2: 0,
+            winding_delta: 0,
+            ring: None,
+        }
+    }
+
+    /// Create a new bound from a list of edges with a specified winding delta.
+    ///
+    /// The winding delta is typically 1 or -1 depending on the winding direction,
+    /// or 0 for linestrings.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `edges` is empty.
+    pub fn new_with_delta(
+        edges: Vec<Edge<T>>,
+        poly_type: PolygonType,
+        side: EdgeSide,
+        winding_delta: i8,
+    ) -> Self {
+        assert!(!edges.is_empty(), "Bound must have at least one edge");
+
+        let current_x = edges[0].bot.x.to_f64().unwrap_or(0.0);
+
+        Self {
+            edges,
+            current_edge_index: 0,
+            current_x,
+            poly_type,
+            side,
+            winding_count: 0,
+            winding_count2: 0,
+            winding_delta,
             ring: None,
         }
     }
@@ -148,6 +185,7 @@ impl<T: CoordNum> Bound<T> {
             side,
             winding_count: 0,
             winding_count2: 0,
+            winding_delta: 0,
             ring: None,
         }
     }
