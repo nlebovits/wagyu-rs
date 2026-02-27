@@ -20,8 +20,9 @@ use crate::active_edge_list::ActiveEdgeList;
 use crate::bound::Bound;
 use crate::build_result::RingManager;
 use crate::config::{FillType, HorizontalDirection};
-use crate::intersect_util::get_current_x;
+use crate::intersect_util::{get_current_x, intersect_bounds};
 use crate::local_minimum::LocalMinimumList;
+use crate::point::Point;
 use crate::process_maxima::{do_maxima, get_maxima_pair, is_intermediate, is_maxima};
 use crate::ring_util;
 use crate::scanbeam::Scanbeam;
@@ -107,6 +108,7 @@ pub fn next_edge_would_be_horizontal<T: CoordNum>(bound: &Bound<T>) -> bool {
 /// * `cliptype` - Boolean operation type
 /// * `subject_fill_type` - Fill rule for subject
 /// * `clip_fill_type` - Fill rule for clip
+/// * `manager` - Ring manager for output polygons
 ///
 /// # Returns
 /// Position to resume processing from (typically where the horizontal was)
@@ -117,9 +119,10 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
     ael: &mut ActiveEdgeList,
     scanline_y: T,
     scanbeam: &mut Scanbeam<T>,
-    _cliptype: Operation,
-    _subject_fill_type: FillType,
-    _clip_fill_type: FillType,
+    cliptype: Operation,
+    subject_fill_type: FillType,
+    clip_fill_type: FillType,
+    manager: &mut RingManager<T>,
 ) -> usize {
     let horz_bound_idx = match ael.get(horz_bound_pos) {
         Some(idx) => idx,
@@ -156,23 +159,97 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
 
         // If this is the maxima pair, handle the maxima
         if Some(next_pos) == max_pair_pos {
-            // Mark both bounds for removal (simplified - full impl would use ring manager)
+            // PORT FROM: C++ lines 75-84 - handle maxima pair
+            let horz_idx = ael.get(current_pos).unwrap();
+            if bounds[horz_idx].ring.is_some() && bounds[next_idx].ring.is_some() {
+                let max_pt = bounds[horz_idx].current_edge().top;
+                ring_util::add_local_maximum_point(
+                    horz_idx,
+                    next_idx,
+                    bounds,
+                    ael.as_slice(),
+                    geo_types::Coord {
+                        x: max_pt.x,
+                        y: max_pt.y,
+                    },
+                    manager,
+                );
+            }
             break;
         }
 
-        // Process intersection (simplified - full impl would call intersect_bounds)
-        // For now, just swap the bounds
+        // PORT FROM: C++ lines 68-70 - add point to ring BEFORE intersection handling
+        // This records the crossing point on the horizontal's ring
+        let horz_idx = ael.get(current_pos).unwrap();
+        if bounds[horz_idx].ring.is_some() {
+            // Round the intersection x coordinate like C++ does with wround
+            let intersection_x = bounds[next_idx].current_x;
+            ring_util::add_point_to_ring(
+                horz_idx,
+                bounds,
+                geo_types::Coord {
+                    x: T::from(intersection_x as i64).unwrap_or(scanline_y),
+                    y: scanline_y,
+                },
+                manager,
+            );
+        }
+
+        // PORT FROM: C++ lines 89-91 - call intersect_bounds
+        // This updates winding counts and handles ring swapping
+        let horz_idx = ael.get(current_pos).unwrap();
+        let intersection_pt = Point::new(
+            T::from(bounds[next_idx].current_x as i64).unwrap_or(scanline_y),
+            scanline_y,
+        );
+
+        // Use split_at_mut to get two mutable references safely
+        {
+            let (b1, b2) = if horz_idx < next_idx {
+                let (left, right) = bounds.split_at_mut(next_idx);
+                (&mut left[horz_idx], &mut right[0])
+            } else {
+                let (left, right) = bounds.split_at_mut(horz_idx);
+                (&mut right[0], &mut left[next_idx])
+            };
+
+            intersect_bounds(
+                b1,
+                b2,
+                intersection_pt,
+                cliptype,
+                subject_fill_type,
+                clip_fill_type,
+                manager,
+            );
+        }
+
+        // Swap positions in AEL
         ael.swap(current_pos, next_pos);
         current_pos = next_pos;
         next_pos += 1;
     }
 
-    // Advance to next edge if there is one
+    // PORT FROM: C++ lines 104-106 - add endpoint to ring AFTER the loop
     let horz_idx = match ael.get(current_pos) {
         Some(idx) => idx,
         None => return horz_bound_pos,
     };
 
+    if bounds[horz_idx].ring.is_some() {
+        let edge_top = bounds[horz_idx].current_edge().top;
+        ring_util::add_point_to_ring(
+            horz_idx,
+            bounds,
+            geo_types::Coord {
+                x: edge_top.x,
+                y: edge_top.y,
+            },
+            manager,
+        );
+    }
+
+    // Advance to next edge if there is one
     if bounds[horz_idx].current_edge_index + 1 < bounds[horz_idx].edges.len() {
         bounds[horz_idx].current_edge_index += 1;
         let new_top_y = bounds[horz_idx].current_edge().top.y;
@@ -194,9 +271,10 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
     ael: &mut ActiveEdgeList,
     scanline_y: T,
     scanbeam: &mut Scanbeam<T>,
-    _cliptype: Operation,
-    _subject_fill_type: FillType,
-    _clip_fill_type: FillType,
+    cliptype: Operation,
+    subject_fill_type: FillType,
+    clip_fill_type: FillType,
+    manager: &mut RingManager<T>,
 ) -> usize {
     let horz_bound_idx = match ael.get(horz_bound_pos) {
         Some(idx) => idx,
@@ -233,20 +311,94 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
 
         // If this is the maxima pair, handle the maxima
         if Some(prev_pos) == max_pair_pos {
+            // PORT FROM: C++ lines 177-186 - handle maxima pair
+            let horz_idx = ael.get(current_pos).unwrap();
+            if bounds[horz_idx].ring.is_some() && bounds[prev_idx].ring.is_some() {
+                let max_pt = bounds[horz_idx].current_edge().top;
+                ring_util::add_local_maximum_point(
+                    horz_idx,
+                    prev_idx,
+                    bounds,
+                    ael.as_slice(),
+                    geo_types::Coord {
+                        x: max_pt.x,
+                        y: max_pt.y,
+                    },
+                    manager,
+                );
+            }
             break;
         }
 
-        // Process intersection (simplified)
+        // PORT FROM: C++ lines 170-173 - add point to ring BEFORE intersection handling
+        let horz_idx = ael.get(current_pos).unwrap();
+        if bounds[horz_idx].ring.is_some() {
+            let intersection_x = bounds[prev_idx].current_x;
+            ring_util::add_point_to_ring(
+                horz_idx,
+                bounds,
+                geo_types::Coord {
+                    x: T::from(intersection_x as i64).unwrap_or(scanline_y),
+                    y: scanline_y,
+                },
+                manager,
+            );
+        }
+
+        // PORT FROM: C++ lines 192-194 - call intersect_bounds
+        // Note: for right-to-left, the bound order is swapped (prev, horz) vs (horz, next)
+        let horz_idx = ael.get(current_pos).unwrap();
+        let intersection_pt = Point::new(
+            T::from(bounds[prev_idx].current_x as i64).unwrap_or(scanline_y),
+            scanline_y,
+        );
+
+        // Use split_at_mut to get two mutable references safely
+        {
+            let (b1, b2) = if prev_idx < horz_idx {
+                let (left, right) = bounds.split_at_mut(horz_idx);
+                (&mut left[prev_idx], &mut right[0])
+            } else {
+                let (left, right) = bounds.split_at_mut(prev_idx);
+                (&mut right[0], &mut left[horz_idx])
+            };
+
+            intersect_bounds(
+                b1,
+                b2,
+                intersection_pt,
+                cliptype,
+                subject_fill_type,
+                clip_fill_type,
+                manager,
+            );
+        }
+
+        // Swap positions in AEL
         ael.swap(prev_pos, current_pos);
         current_pos = prev_pos;
     }
 
-    // Advance to next edge if there is one
+    // PORT FROM: C++ lines 204-206 - add endpoint to ring AFTER the loop
     let horz_idx = match ael.get(current_pos) {
         Some(idx) => idx,
         None => return horz_bound_pos,
     };
 
+    if bounds[horz_idx].ring.is_some() {
+        let edge_top = bounds[horz_idx].current_edge().top;
+        ring_util::add_point_to_ring(
+            horz_idx,
+            bounds,
+            geo_types::Coord {
+                x: edge_top.x,
+                y: edge_top.y,
+            },
+            manager,
+        );
+    }
+
+    // Advance to next edge if there is one
     if bounds[horz_idx].current_edge_index + 1 < bounds[horz_idx].edges.len() {
         bounds[horz_idx].current_edge_index += 1;
         let new_top_y = bounds[horz_idx].current_edge().top.y;
@@ -279,6 +431,7 @@ pub fn process_horizontal<T: CoordNum + ToPrimitive>(
     cliptype: Operation,
     subject_fill_type: FillType,
     clip_fill_type: FillType,
+    manager: &mut RingManager<T>,
 ) -> usize {
     let horz_bound_idx = match ael.get(horz_bound_pos) {
         Some(idx) => idx,
@@ -297,6 +450,7 @@ pub fn process_horizontal<T: CoordNum + ToPrimitive>(
             cliptype,
             subject_fill_type,
             clip_fill_type,
+            manager,
         ),
         HorizontalDirection::RightToLeft => process_horizontal_right_to_left(
             horz_bound_pos,
@@ -307,6 +461,7 @@ pub fn process_horizontal<T: CoordNum + ToPrimitive>(
             cliptype,
             subject_fill_type,
             clip_fill_type,
+            manager,
         ),
     }
 }
@@ -317,6 +472,7 @@ pub fn process_horizontal<T: CoordNum + ToPrimitive>(
 ///
 /// Iterates through the AEL and processes each bound that has a horizontal
 /// current edge.
+#[allow(clippy::too_many_arguments)]
 pub fn process_horizontals<T: CoordNum + ToPrimitive>(
     bounds: &mut [Bound<T>],
     ael: &mut ActiveEdgeList,
@@ -325,6 +481,7 @@ pub fn process_horizontals<T: CoordNum + ToPrimitive>(
     cliptype: Operation,
     subject_fill_type: FillType,
     clip_fill_type: FillType,
+    manager: &mut RingManager<T>,
 ) {
     let mut pos = 0;
 
@@ -347,6 +504,7 @@ pub fn process_horizontals<T: CoordNum + ToPrimitive>(
                 cliptype,
                 subject_fill_type,
                 clip_fill_type,
+                manager,
             );
         }
         pos += 1;
@@ -551,6 +709,7 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
         clip_type,
         subject_fill_type,
         clip_fill_type,
+        manager,
     );
 
     // 4. Promote intermediate vertices
@@ -629,6 +788,7 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
 mod tests {
     use super::*;
     use crate::bound::Edge;
+    use crate::build_result::RingManager;
     use crate::config::{EdgeSide, PolygonType};
     use crate::point::Point;
 
@@ -745,6 +905,7 @@ mod tests {
         ael.insert(1, &bounds);
 
         let mut scanbeam: Scanbeam<f64> = Scanbeam::new();
+        let mut manager: RingManager<f64> = RingManager::new();
 
         let result = process_horizontal_left_to_right(
             0,
@@ -755,6 +916,7 @@ mod tests {
             Operation::Union,
             FillType::EvenOdd,
             FillType::EvenOdd,
+            &mut manager,
         );
 
         // Should complete without panic
@@ -771,6 +933,7 @@ mod tests {
         ael.insert(0, &bounds);
 
         let mut scanbeam: Scanbeam<f64> = Scanbeam::new();
+        let mut manager: RingManager<f64> = RingManager::new();
 
         let result = process_horizontal_left_to_right(
             0,
@@ -781,6 +944,7 @@ mod tests {
             Operation::Union,
             FillType::EvenOdd,
             FillType::EvenOdd,
+            &mut manager,
         );
 
         assert_eq!(result, 0);
@@ -804,6 +968,7 @@ mod tests {
         ael.insert(0, &bounds); // Then horizontal (higher x)
 
         let mut scanbeam: Scanbeam<f64> = Scanbeam::new();
+        let mut manager: RingManager<f64> = RingManager::new();
 
         let result = process_horizontal_right_to_left(
             1, // Position of horizontal in AEL
@@ -814,6 +979,7 @@ mod tests {
             Operation::Union,
             FillType::EvenOdd,
             FillType::EvenOdd,
+            &mut manager,
         );
 
         // Should complete without panic
@@ -831,6 +997,7 @@ mod tests {
         ael.insert(0, &bounds);
 
         let mut scanbeam: Scanbeam<f64> = Scanbeam::new();
+        let mut manager: RingManager<f64> = RingManager::new();
 
         // Should dispatch to left-to-right
         let result = process_horizontal(
@@ -842,6 +1009,7 @@ mod tests {
             Operation::Union,
             FillType::EvenOdd,
             FillType::EvenOdd,
+            &mut manager,
         );
 
         assert_eq!(result, 0);
@@ -857,6 +1025,7 @@ mod tests {
         ael.insert(0, &bounds);
 
         let mut scanbeam: Scanbeam<f64> = Scanbeam::new();
+        let mut manager: RingManager<f64> = RingManager::new();
 
         // Should dispatch to right-to-left
         let result = process_horizontal(
@@ -868,6 +1037,7 @@ mod tests {
             Operation::Union,
             FillType::EvenOdd,
             FillType::EvenOdd,
+            &mut manager,
         );
 
         assert_eq!(result, 0);
@@ -889,6 +1059,7 @@ mod tests {
         ael.insert(1, &bounds);
 
         let mut scanbeam: Scanbeam<f64> = Scanbeam::new();
+        let mut manager: RingManager<f64> = RingManager::new();
 
         // Should not modify anything since no horizontals
         process_horizontals(
@@ -899,6 +1070,7 @@ mod tests {
             Operation::Union,
             FillType::EvenOdd,
             FillType::EvenOdd,
+            &mut manager,
         );
 
         // AEL should remain unchanged
@@ -919,6 +1091,7 @@ mod tests {
         ael.insert(1, &bounds);
 
         let mut scanbeam: Scanbeam<f64> = Scanbeam::new();
+        let mut manager: RingManager<f64> = RingManager::new();
 
         process_horizontals(
             &mut bounds,
@@ -928,6 +1101,7 @@ mod tests {
             Operation::Union,
             FillType::EvenOdd,
             FillType::EvenOdd,
+            &mut manager,
         );
 
         // Should complete without panic
