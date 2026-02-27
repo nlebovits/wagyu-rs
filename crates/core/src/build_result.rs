@@ -313,8 +313,9 @@ fn build_polygon<T: CoordNum + Copy>(
     let mut holes = Vec::new();
     for &hole_index in exterior_ring.children() {
         if let Some(hole_ring) = manager.get(hole_index) {
-            // Add the hole with reversed winding (holes have opposite winding to exterior)
-            holes.push(ring_to_linestring(hole_ring, !reverse_output));
+            // PORT FROM: C++ build_result.hpp - holes use same reverse_output flag as exterior
+            // The ring already has correct CW winding from correct_orientations
+            holes.push(ring_to_linestring(hole_ring, reverse_output));
 
             // Grandchildren of holes become new exterior rings
             for &grandchild_index in hole_ring.children() {

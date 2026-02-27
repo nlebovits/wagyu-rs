@@ -569,6 +569,21 @@ pub fn add_first_point<T: CoordNum + Copy>(
     // Set parent if found
     if let Some(parent_idx) = parent_ring {
         rings.set_parent(ring_idx, parent_idx);
+        // If this ring has a parent, it's a hole
+        if let Some(ring) = rings.get_mut(ring_idx) {
+            ring.set_hole(true);
+        }
+    }
+
+    if std::env::var("WAGYU_DEBUG").is_ok() {
+        use num_traits::ToPrimitive;
+        eprintln!(
+            "DEBUG: add_first_point created ring {} with point ({}, {}) parent={:?}",
+            ring_idx,
+            pt.x.to_f64().unwrap_or(0.0),
+            pt.y.to_f64().unwrap_or(0.0),
+            parent_ring
+        );
     }
 
     ring_idx
@@ -604,7 +619,21 @@ pub fn add_point_to_ring<T: CoordNum + Copy>(
     //   - Left side points are inserted at the FRONT (bnd.ring->points = new_point)
     //   - Right side points are inserted at the BACK (before head = after tail)
     // We replicate this with Vec operations.
-    let to_front = bounds[bound_idx].side == EdgeSide::Left;
+    let side = bounds[bound_idx].side;
+    let to_front = side == EdgeSide::Left;
+
+    if std::env::var("WAGYU_DEBUG").is_ok() {
+        use num_traits::ToPrimitive;
+        eprintln!(
+            "DEBUG: add_point_to_ring bound {} side={:?} to_front={} ring {} pt=({}, {})",
+            bound_idx,
+            side,
+            to_front,
+            ring_idx,
+            pt.x.to_f64().unwrap_or(0.0),
+            pt.y.to_f64().unwrap_or(0.0)
+        );
+    }
 
     if let Some(ring) = rings.get_mut(ring_idx) {
         // Check for duplicate at the insertion position
@@ -622,6 +651,17 @@ pub fn add_point_to_ring<T: CoordNum + Copy>(
                 }
             }
             ring.push_point(pt);
+        }
+
+        if std::env::var("WAGYU_DEBUG").is_ok() && ring_idx == 1 {
+            use num_traits::ToPrimitive;
+            eprintln!(
+                "DEBUG: Ring 1 state after add: {:?}",
+                ring.points()
+                    .iter()
+                    .map(|c| (c.x.to_f64().unwrap_or(0.0) as i64, c.y.to_f64().unwrap_or(0.0) as i64))
+                    .collect::<Vec<_>>()
+            );
         }
     }
 }

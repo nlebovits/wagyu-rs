@@ -388,12 +388,29 @@ pub fn update_winding_counts<T: CoordNum>(
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - add_point
 ///
 /// This adds the intersection point to the bound's ring if one exists.
+/// The bound's side determines where the point is inserted:
+/// - Left side: insert at front (prepend)
+/// - Right side: insert at back (append)
 fn add_point<T: CoordNum>(bound: &mut Bound<T>, pt: Point<T>, manager: &mut RingManager<T>) {
     if let Some(ring_idx) = bound.ring {
         // Check if this point differs from last_point
         if pt.x != bound.last_point.x || pt.y != bound.last_point.y {
+            let coord = geo_types::Coord { x: pt.x, y: pt.y };
+            let to_front = bound.side == EdgeSide::Left;
+
             if let Some(ring) = manager.get_mut(ring_idx) {
-                ring.add_point(geo_types::Coord { x: pt.x, y: pt.y });
+                // Check for duplicate at insertion position
+                if to_front {
+                    if ring.first() == Some(&coord) {
+                        return;
+                    }
+                    ring.insert_at_front(coord);
+                } else {
+                    if ring.points().last() == Some(&coord) {
+                        return;
+                    }
+                    ring.push_point(coord);
+                }
             }
             bound.last_point = pt;
         }

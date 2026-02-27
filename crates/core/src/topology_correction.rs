@@ -525,8 +525,17 @@ fn correct_orientations<T: CoordNum + Copy>(manager: &mut crate::build_result::R
             continue;
         }
 
+        let needs_reversal = needs_orientation_reversal(area, is_hole);
+
+        if std::env::var("WAGYU_DEBUG").is_ok() {
+            eprintln!(
+                "DEBUG: correct_orientations ring {} area={:.2} is_hole={} needs_reversal={}",
+                idx, area, is_hole, needs_reversal
+            );
+        }
+
         // Check if orientation needs correction
-        if needs_orientation_reversal(area, is_hole) {
+        if needs_reversal {
             if let Some(ring) = manager.get_mut(idx) {
                 reverse_ring(ring.points_mut());
             }
