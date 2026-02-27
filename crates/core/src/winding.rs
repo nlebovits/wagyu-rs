@@ -142,8 +142,7 @@ pub fn set_winding_count<T: CoordNum>(
                         bounds[bound_index].winding_count = prev_winding_count;
                     } else {
                         // Add to WC
-                        bounds[bound_index].winding_count =
-                            prev_winding_count + bnd_winding_delta;
+                        bounds[bound_index].winding_count = prev_winding_count + bnd_winding_delta;
                     }
                 }
                 bounds[bound_index].winding_count2 = bounds[prev_idx].winding_count2;

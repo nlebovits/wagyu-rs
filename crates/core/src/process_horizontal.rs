@@ -475,7 +475,10 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
                                 pair_bound_idx,
                                 bounds,
                                 ael.as_slice(),
-                                geo_types::Coord { x: max_pt.x, y: max_pt.y },
+                                geo_types::Coord {
+                                    x: max_pt.x,
+                                    y: max_pt.y,
+                                },
                                 manager,
                             );
                         }
@@ -515,7 +518,10 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
                 ring_util::add_point_to_ring(
                     bound_idx,
                     bounds,
-                    geo_types::Coord { x: edge_top.x, y: edge_top.y },
+                    geo_types::Coord {
+                        x: edge_top.x,
+                        y: edge_top.y,
+                    },
                     manager,
                 );
             }
@@ -602,7 +608,10 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
                 ring_util::add_point_to_ring(
                     bound_idx,
                     bounds,
-                    geo_types::Coord { x: edge_top.x, y: edge_top.y },
+                    geo_types::Coord {
+                        x: edge_top.x,
+                        y: edge_top.y,
+                    },
                     manager,
                 );
             }

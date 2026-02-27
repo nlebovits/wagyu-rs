@@ -231,7 +231,13 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
 
         // PORT FROM: C++ insert_lm_left_and_right_bound (lines 340-345)
         // Set winding count for the left bound based on bounds to its left
-        winding::set_winding_count(left_pos, ael.as_slice(), bounds, subject_fill_type, clip_fill_type);
+        winding::set_winding_count(
+            left_pos,
+            ael.as_slice(),
+            bounds,
+            subject_fill_type,
+            clip_fill_type,
+        );
 
         // Copy winding counts to right bound (they share the same local minimum)
         // From C++: (*rb_abl_itr)->winding_count = (*lb_abl_itr)->winding_count;
@@ -265,10 +271,7 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
             for (i, &idx) in ael.as_slice().iter().enumerate() {
                 eprintln!(
                     "DEBUG:   [{}] bound {} at x={:.2} poly_type={:?}",
-                    i,
-                    idx,
-                    bounds[idx].current_x,
-                    bounds[idx].poly_type
+                    i, idx, bounds[idx].current_x, bounds[idx].poly_type
                 );
             }
         }

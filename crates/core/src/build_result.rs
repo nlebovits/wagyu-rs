@@ -273,11 +273,14 @@ pub fn build_result<T: CoordNum + Copy>(
                     ring.parent(),
                     ring.is_hole()
                 );
-                if ring.points().len() > 0 {
+                if !ring.points().is_empty() {
                     for (j, pt) in ring.points().iter().take(5).enumerate() {
-                        eprintln!("DEBUG:     pt {}: ({}, {})", j,
+                        eprintln!(
+                            "DEBUG:     pt {}: ({}, {})",
+                            j,
                             num_traits::ToPrimitive::to_f64(&pt.x).unwrap_or(0.0),
-                            num_traits::ToPrimitive::to_f64(&pt.y).unwrap_or(0.0));
+                            num_traits::ToPrimitive::to_f64(&pt.y).unwrap_or(0.0)
+                        );
                     }
                 }
             }
