@@ -233,8 +233,17 @@ fn greater_than(a: f64, b: f64) -> bool {
 
 /// Get the x coordinate of an edge at a given y coordinate.
 ///
-/// From C++: `get_current_x(edge<T> const& edge, T y)`
+/// From C++: `get_current_x(edge<T> const& edge, T y)` in edge.hpp:81-87
+///
+/// IMPORTANT: When y == edge.top.y, we return edge.top.x directly.
+/// This is critical for horizontal edges where bot.x != top.x.
 fn get_current_x<T: CoordNum>(edge: &crate::bound::Edge<T>, y: f64) -> f64 {
+    // C++ special case: when at the top of the edge, return top.x directly.
+    let top_y = edge.top.y.to_f64().unwrap_or(0.0);
+    if (y - top_y).abs() < f64::EPSILON {
+        return edge.top.x.to_f64().unwrap_or(0.0);
+    }
+
     if edge.is_horizontal() {
         edge.bot.x.to_f64().unwrap_or(0.0)
     } else {
@@ -548,9 +557,14 @@ mod tests {
 
     #[test]
     fn get_current_x_for_horizontal_edge() {
-        // Horizontal edge returns bot.x
+        // Horizontal edge at y == top.y returns top.x (C++ edge.hpp:81-87)
+        // bot=(5.0, 10.0), top=(15.0, 10.0) -> at y=10.0, returns top.x=15.0
         let edge = Edge::new(Point::new(5.0_f64, 10.0), Point::new(15.0_f64, 10.0));
-        assert!((get_current_x(&edge, 10.0) - 5.0).abs() < 1e-10);
+        assert!(
+            (get_current_x(&edge, 10.0) - 15.0).abs() < 1e-10,
+            "Expected top.x=15.0 at y=top.y, got {}",
+            get_current_x(&edge, 10.0)
+        );
     }
 
     // ==================== Edge Case Tests ====================

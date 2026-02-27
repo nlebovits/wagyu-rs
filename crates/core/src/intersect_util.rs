@@ -112,8 +112,18 @@ pub fn get_edge_intersection<T: CoordNum>(e1: &Edge<T>, e2: &Edge<T>) -> Option<
 
 /// Get the x coordinate of an edge at a given y coordinate.
 ///
-/// From C++: `get_current_x(edge, y)`
+/// From C++: `get_current_x(edge, y)` in edge.hpp:81-87
+///
+/// IMPORTANT: When y == edge.top.y, we return edge.top.x directly.
+/// This is critical for horizontal edges where bot.x != top.x, as the
+/// linear interpolation formula would incorrectly return bot.x.
 pub fn get_current_x<T: CoordNum>(edge: &Edge<T>, y: T) -> f64 {
+    // C++ special case: when at the top of the edge, return top.x directly.
+    // This is critical for horizontal edges where bot.x != top.x.
+    if y == edge.top.y {
+        return edge.top.x.to_f64().unwrap_or(0.0);
+    }
+
     if edge.is_horizontal() {
         edge.bot.x.to_f64().unwrap_or(0.0)
     } else {
@@ -135,7 +145,15 @@ pub fn get_current_x<T: CoordNum>(edge: &Edge<T>, y: T) -> f64 {
 fn intersection_compare<T: CoordNum + ToPrimitive>(b1: &Bound<T>, b2: &Bound<T>) -> bool {
     // Returns true if NOT (b1.current_x > b2.current_x AND slopes not equal)
     // i.e., returns false if b1.current_x > b2.current_x and edges aren't parallel
-    b1.current_x <= b2.current_x || slopes_equal_edges(b1.current_edge(), b2.current_edge())
+    let result =
+        b1.current_x <= b2.current_x || slopes_equal_edges(b1.current_edge(), b2.current_edge());
+    if std::env::var("WAGYU_DEBUG").is_ok() && !result {
+        eprintln!(
+            "DEBUG: intersection_compare FALSE: b1.x={:.2} > b2.x={:.2} and slopes differ",
+            b1.current_x, b2.current_x
+        );
+    }
+    result
 }
 
 /// Check if two edges have equal slopes.
@@ -191,7 +209,24 @@ pub fn build_intersect_list<T>(
                 // Bounds crossed - record intersection
                 if let Some(pt) = get_edge_intersection(b1.current_edge(), b2.current_edge()) {
                     let rounded: Point<T> = round_point(pt);
+                    if std::env::var("WAGYU_DEBUG").is_ok() {
+                        eprintln!(
+                            "DEBUG: Found intersection at ({:?}, {:?}) between bounds {} and {}",
+                            rounded.x.to_f64(),
+                            rounded.y.to_f64(),
+                            idx1,
+                            idx2
+                        );
+                    }
                     intersects.push(IntersectNode::new(rounded, idx1, idx2));
+                } else if std::env::var("WAGYU_DEBUG").is_ok() {
+                    eprintln!(
+                        "DEBUG: Bounds {} and {} out of order (b1.x={:.2} > b2.x={:.2}) but no intersection found",
+                        idx1,
+                        idx2,
+                        b1.current_x,
+                        b2.current_x
+                    );
                 }
                 // Swap in simulated order (not in actual AEL)
                 simulated_order.swap(i, i + 1);
@@ -205,9 +240,19 @@ pub fn build_intersect_list<T>(
 ///
 /// From C++: `update_current_x(active_bounds, top_y)`
 pub fn update_current_x<T: CoordNum>(ael: &ActiveEdgeList, bounds: &mut [Bound<T>], top_y: T) {
+    if std::env::var("WAGYU_DEBUG").is_ok() {
+        eprintln!("DEBUG: update_current_x at y={:?}", top_y.to_f64());
+    }
     for &idx in ael.iter() {
         if let Some(bound) = bounds.get_mut(idx) {
+            let old_x = bound.current_x;
             bound.current_x = get_current_x(bound.current_edge(), top_y);
+            if std::env::var("WAGYU_DEBUG").is_ok() {
+                eprintln!(
+                    "DEBUG:   bound {} x: {:.2} -> {:.2}",
+                    idx, old_x, bound.current_x
+                );
+            }
         }
     }
 }
@@ -876,10 +921,51 @@ mod tests {
     }
 
     #[test]
-    fn get_current_x_horizontal_returns_bot_x() {
+    fn get_current_x_horizontal_returns_top_x() {
+        // Horizontal edge: bot=(5.0, 10.0), top=(15.0, 10.0)
+        // At y=10.0 (which equals top.y), C++ returns top.x = 15.0
+        // This was previously incorrectly testing for bot.x = 5.0
         let edge = make_edge((5.0, 10.0), (15.0, 10.0)); // horizontal
         let x = get_current_x(&edge, 10.0_f64);
-        assert!((x - 5.0).abs() < 1e-10);
+        assert!(
+            (x - 15.0).abs() < 1e-10,
+            "Horizontal edge at y==top.y should return top.x (15.0), got {}",
+            x
+        );
+    }
+
+    /// Test that get_current_x returns top.x when y == top.y (C++ special case).
+    ///
+    /// This is critical for horizontal edges where bot.x != top.x.
+    /// C++ code from edge.hpp:81-87:
+    /// ```cpp
+    /// if (current_y == edge.top.y) {
+    ///     return static_cast<double>(edge.top.x);
+    /// }
+    /// ```
+    #[test]
+    fn get_current_x_at_top_y_returns_top_x() {
+        // Horizontal edge from (2500, -2500) to (-2500, -2500)
+        // bot = (2500, -2500), top = (-2500, -2500) based on Edge::new logic
+        // At y = -2500 (top.y), C++ returns top.x = -2500
+        let edge = make_edge((2500.0, -2500.0), (-2500.0, -2500.0));
+        let x = get_current_x(&edge, -2500.0_f64);
+        // C++ returns top.x = -2500.0, not bot.x = 2500.0
+        assert!(
+            (x - (-2500.0)).abs() < 1e-10,
+            "Expected top.x (-2500.0) when y == top.y, got {} (likely bot.x)",
+            x
+        );
+    }
+
+    /// Test that non-horizontal edges also return top.x at top.y (edge case).
+    #[test]
+    fn get_current_x_non_horizontal_at_top_y() {
+        // Diagonal edge from (0, 0) to (10, 10)
+        let edge = make_edge((0.0, 0.0), (10.0, 10.0));
+        let x = get_current_x(&edge, 10.0_f64);
+        // At top.y=10, should return top.x=10
+        assert!((x - 10.0).abs() < 1e-10);
     }
 
     // ==================== is_even_odd_fill_type Tests ====================
@@ -1096,5 +1182,160 @@ mod tests {
         assert!((bounds[0].current_x - 5.0).abs() < 1e-10);
         // Edge 2: at y=5, x should be 10
         assert!((bounds[1].current_x - 10.0).abs() < 1e-10);
+    }
+
+    // ==================== MINIMAL CROSSING TEST ====================
+    // This test creates the SIMPLEST possible case where two edges cross.
+    // It uses two edges forming an X pattern and verifies intersection detection.
+
+    #[test]
+    fn minimal_x_pattern_crossing_detection() {
+        // Two edges that CLEARLY cross in an X pattern:
+        //
+        //    y=10:   *           *
+        //            |\         /|
+        //            | \       / |
+        //    y=5:    |  \  X  /  |    <- crossing point at (5, 5)
+        //            |   \   /   |
+        //            |    \ /    |
+        //    y=0:    *     *     *
+        //           x=0   x=5   x=10
+        //
+        // Edge A: (0, 10) -> (10, 0)  -- goes down-right
+        // Edge B: (10, 10) -> (0, 0)  -- goes down-left
+        //
+        // In wagyu convention: bot.y >= top.y
+        // So Edge A: bot=(0, 10), top=(10, 0)
+        //    Edge B: bot=(10, 10), top=(0, 0)
+
+        // First, verify the edge geometry is correct
+        let edge_a = Edge::new(Point::new(0.0_f64, 10.0), Point::new(10.0_f64, 0.0));
+        let edge_b = Edge::new(Point::new(10.0_f64, 10.0), Point::new(0.0_f64, 0.0));
+
+        // Verify orientation (bot.y >= top.y)
+        assert!(
+            edge_a.bot.y >= edge_a.top.y,
+            "Edge A should have bot.y >= top.y, but bot={:?}, top={:?}",
+            edge_a.bot,
+            edge_a.top
+        );
+        assert!(
+            edge_b.bot.y >= edge_b.top.y,
+            "Edge B should have bot.y >= top.y, but bot={:?}, top={:?}",
+            edge_b.bot,
+            edge_b.top
+        );
+
+        // Verify dx is computed correctly
+        // For edge_a: dx = (top.x - bot.x) / (top.y - bot.y) = (10 - 0) / (0 - 10) = -1
+        eprintln!(
+            "Edge A: bot={:?}, top={:?}, dx={}",
+            edge_a.bot, edge_a.top, edge_a.dx
+        );
+        eprintln!(
+            "Edge B: bot={:?}, top={:?}, dx={}",
+            edge_b.bot, edge_b.top, edge_b.dx
+        );
+        assert!(
+            (edge_a.dx - (-1.0)).abs() < 1e-10,
+            "Edge A dx should be -1, got {}",
+            edge_a.dx
+        );
+        // For edge_b: dx = (top.x - bot.x) / (top.y - bot.y) = (0 - 10) / (0 - 10) = 1
+        assert!(
+            (edge_b.dx - 1.0).abs() < 1e-10,
+            "Edge B dx should be 1, got {}",
+            edge_b.dx
+        );
+
+        // Create bounds from these edges
+        let mut bounds = vec![
+            Bound::new(vec![edge_a], PolygonType::Subject, EdgeSide::Left),
+            Bound::new(vec![edge_b], PolygonType::Subject, EdgeSide::Right),
+        ];
+
+        // At y=10 (the starting scanline), edges start at:
+        // - Edge A: x = 0 (from bot.x)
+        // - Edge B: x = 10 (from bot.x)
+        bounds[0].current_x = get_current_x(bounds[0].current_edge(), 10.0_f64);
+        bounds[1].current_x = get_current_x(bounds[1].current_edge(), 10.0_f64);
+
+        eprintln!(
+            "At y=10: bound[0].x = {}, bound[1].x = {}",
+            bounds[0].current_x, bounds[1].current_x
+        );
+        assert!(
+            (bounds[0].current_x - 0.0).abs() < 1e-10,
+            "At y=10, edge A should be at x=0"
+        );
+        assert!(
+            (bounds[1].current_x - 10.0).abs() < 1e-10,
+            "At y=10, edge B should be at x=10"
+        );
+
+        // Insert into AEL in initial order (bound 0 first because it has lower x)
+        let mut ael = ActiveEdgeList::new();
+        ael.insert(0, &bounds);
+        ael.insert(1, &bounds);
+
+        // Now advance to y=0 (bottom scanline)
+        // At y=0:
+        // - Edge A: x = 0 + dx * (0 - 10) = 0 + (-1) * (-10) = 10
+        // - Edge B: x = 10 + dx * (0 - 10) = 10 + 1 * (-10) = 0
+        update_current_x(&ael, &mut bounds, 0.0_f64);
+
+        eprintln!(
+            "At y=0: bound[0].x = {}, bound[1].x = {}",
+            bounds[0].current_x, bounds[1].current_x
+        );
+        assert!(
+            (bounds[0].current_x - 10.0).abs() < 1e-10,
+            "At y=0, edge A should be at x=10, got {}",
+            bounds[0].current_x
+        );
+        assert!(
+            (bounds[1].current_x - 0.0).abs() < 1e-10,
+            "At y=0, edge B should be at x=0, got {}",
+            bounds[1].current_x
+        );
+
+        // The edges have CROSSED! Bound 0 is now at x=10, bound 1 is at x=0
+        // But in the AEL, bound 0 comes BEFORE bound 1.
+        // This means bound 0 (x=10) comes before bound 1 (x=0) -- they're out of order!
+
+        // Now build_intersect_list should detect this crossing
+        let mut intersects: IntersectList<f64> = IntersectList::new();
+        build_intersect_list(&ael, &bounds, &mut intersects);
+
+        // This is the critical assertion: intersection MUST be detected
+        assert!(
+            !intersects.is_empty(),
+            "Two clearly crossing edges should produce an intersection! \
+            Bound 0 (x={}) comes before Bound 1 (x={}) in AEL but has higher x.",
+            bounds[0].current_x,
+            bounds[1].current_x
+        );
+
+        // Verify the intersection point is correct (should be at (5, 5))
+        let node = &intersects[0];
+        let pt = get_edge_intersection(
+            bounds[node.bound1_index].current_edge(),
+            bounds[node.bound2_index].current_edge(),
+        );
+        assert!(
+            pt.is_some(),
+            "get_edge_intersection should find the crossing"
+        );
+        let pt = pt.unwrap();
+        assert!(
+            (pt.x - 5.0).abs() < 1e-10,
+            "Intersection x should be 5, got {}",
+            pt.x
+        );
+        assert!(
+            (pt.y - 5.0).abs() < 1e-10,
+            "Intersection y should be 5, got {}",
+            pt.y
+        );
     }
 }
