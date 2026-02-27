@@ -455,7 +455,9 @@ mod tests {
             FillType::EvenOdd,
         );
 
-        // Should return starting position
-        assert_eq!(next_pos, 0);
+        // From C++: if (!skipped) { ++return_bnd; }
+        // Adjacent bounds (0,1) have nothing between them, so nothing is skipped.
+        // Return value should be incremented: 0 + 1 = 1
+        assert_eq!(next_pos, 1);
     }
 }
