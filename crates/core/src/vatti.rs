@@ -123,7 +123,16 @@ pub fn execute_vatti<T>(
 
     // Main sweep loop
     // From C++: while (pop_from_scanbeam(scanline_y, scanbeam) || current_lm != minima_sorted.end())
+    let debug = std::env::var("WAGYU_DEBUG").is_ok();
     while pop_from_scanbeam(&mut scanline_y, &mut scanbeam) || current_lm_idx < minima_list.len() {
+        if debug {
+            eprintln!(
+                "DEBUG: Vatti loop - scanline_y={:?} current_lm_idx={} remaining_scanbeam={}",
+                scanline_y.to_f64(),
+                current_lm_idx,
+                scanbeam.len()
+            );
+        }
         // From C++: process_intersections(scanline_y, active_bounds, cliptype, subject_fill_type, clip_fill_type, manager);
         process_intersections(
             scanline_y,
@@ -132,6 +141,7 @@ pub fn execute_vatti<T>(
             clip_type,
             subject_fill_type,
             clip_fill_type,
+            manager,
         );
 
         // From C++: update_current_hp_itr(scanline_y, manager);

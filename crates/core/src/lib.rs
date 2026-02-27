@@ -45,6 +45,7 @@ pub mod topology_correction;
 pub mod util;
 pub mod vatti;
 pub mod wagyu;
+pub mod winding;
 
 pub use active_edge_list::ActiveEdgeList;
 pub use bound::{Bound, Edge};
@@ -58,9 +59,11 @@ pub use ring::Ring;
 pub use scanbeam::Scanbeam;
 
 pub use ring_util::{
-    box2_contains_box1, centroid_of_three_points, get_bottom_point_index, get_dx,
-    greater_than_or_equal, is_convex, point_in_polygon, ring_area, round_towards_max,
-    round_towards_min, value_is_zero, values_are_equal, BBox, PointInPolygonResult,
+    add_first_point, add_local_maximum_point, add_local_minimum_point, add_point,
+    add_point_to_ring, append_ring, box2_contains_box1, centroid_of_three_points,
+    get_bottom_point_index, get_dx, greater_than_or_equal, is_convex, point_in_polygon, ring_area,
+    round_towards_max, round_towards_min, set_hole_state, value_is_zero, values_are_equal, BBox,
+    PointInPolygonResult,
 };
 pub use topology_correction::{
     compare_points, find_collinear_sequences, find_duplicate_points, needs_orientation_reversal,
@@ -77,6 +80,9 @@ pub use config::{FillType, PolygonType};
 pub use error::WagyuError;
 pub use vatti::execute_vatti;
 pub use wagyu::{BoundingBox, Coord, MultiPolygon, Polygon, Wagyu};
+pub use winding::{
+    is_contributing, is_even_odd_alt_fill_type, is_even_odd_fill_type, set_winding_count,
+};
 
 /// Boolean operation types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -142,10 +142,18 @@ impl<T: CoordNum> RingManager<T> {
     }
 
     /// Recalculate top-level rings after tree modifications.
+    ///
+    /// Filters out empty rings (those with fewer than 3 points) since they
+    /// cannot form valid polygons.
     pub fn recalculate_top_level_rings(&mut self) {
         self.top_level_rings.clear();
         for i in 0..self.rings.len() {
-            if self.rings[i].parent().is_none() && !self.rings[i].is_hole() {
+            let ring = &self.rings[i];
+            // Skip empty or degenerate rings (need at least 3 points for a polygon)
+            if ring.points().len() < 3 {
+                continue;
+            }
+            if ring.parent().is_none() && !ring.is_hole() {
                 self.top_level_rings.push(i);
             }
         }
@@ -253,6 +261,33 @@ pub fn build_result<T: CoordNum + Copy>(
     manager: &RingManager<T>,
     reverse_output: bool,
 ) -> MultiPolygon<T> {
+    // DEBUG: Print ring state
+    if std::env::var("WAGYU_DEBUG").is_ok() {
+        eprintln!("DEBUG: build_result - {} rings total", manager.len());
+        for i in 0..manager.len() {
+            if let Some(ring) = manager.get(i) {
+                eprintln!(
+                    "DEBUG:   Ring {}: {} points, parent={:?}, is_hole={}",
+                    i,
+                    ring.points().len(),
+                    ring.parent(),
+                    ring.is_hole()
+                );
+                if !ring.points().is_empty() {
+                    for (j, pt) in ring.points().iter().take(5).enumerate() {
+                        eprintln!(
+                            "DEBUG:     pt {}: ({}, {})",
+                            j,
+                            num_traits::ToPrimitive::to_f64(&pt.x).unwrap_or(0.0),
+                            num_traits::ToPrimitive::to_f64(&pt.y).unwrap_or(0.0)
+                        );
+                    }
+                }
+            }
+        }
+        eprintln!("DEBUG: top_level_rings: {:?}", manager.top_level_rings());
+    }
+
     let mut polygons = Vec::new();
 
     // Start with top-level exterior rings
@@ -282,7 +317,7 @@ mod tests {
     // ==================== Helper Functions ====================
 
     fn make_square_ring(size: f64) -> Ring<f64> {
-        let mut ring = Ring::new();
+        let mut ring = Ring::empty();
         ring.push_point(Coord { x: 0.0, y: 0.0 });
         ring.push_point(Coord { x: size, y: 0.0 });
         ring.push_point(Coord { x: size, y: size });
@@ -291,7 +326,7 @@ mod tests {
     }
 
     fn make_square_ring_at(x: f64, y: f64, size: f64) -> Ring<f64> {
-        let mut ring = Ring::new();
+        let mut ring = Ring::empty();
         ring.push_point(Coord { x, y });
         ring.push_point(Coord { x: x + size, y });
         ring.push_point(Coord {
@@ -402,7 +437,7 @@ mod tests {
 
     #[test]
     fn ring_to_linestring_empty_ring_returns_empty_linestring() {
-        let ring: Ring<f64> = Ring::new();
+        let ring: Ring<f64> = Ring::empty();
         let ls = ring_to_linestring(&ring, false);
         assert!(ls.0.is_empty());
     }
@@ -439,7 +474,7 @@ mod tests {
 
     #[test]
     fn ring_to_linestring_already_closed_ring_not_doubled() {
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.push_point(Coord { x: 0.0, y: 0.0 });
         ring.push_point(Coord { x: 10.0, y: 0.0 });
         ring.push_point(Coord { x: 10.0, y: 10.0 });

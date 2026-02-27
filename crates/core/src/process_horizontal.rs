@@ -22,7 +22,8 @@ use crate::build_result::RingManager;
 use crate::config::{FillType, HorizontalDirection};
 use crate::intersect_util::get_current_x;
 use crate::local_minimum::LocalMinimumList;
-use crate::process_maxima::{do_maxima, get_maxima_pair, is_maxima};
+use crate::process_maxima::{do_maxima, get_maxima_pair, is_intermediate, is_maxima};
+use crate::ring_util;
 use crate::scanbeam::Scanbeam;
 use crate::Operation;
 
@@ -381,7 +382,7 @@ pub fn update_all_current_x<T: CoordNum>(bounds: &mut [Bound<T>], ael: &ActiveEd
 /// * `minima_sorted` - Sorted indices into minima_list
 /// * `current_lm_idx` - Current position in minima_sorted
 /// * `minima_list` - List of local minima
-/// * `_manager` - Ring manager for output (unused in this stub)
+/// * `manager` - Ring manager for output
 /// * `clip_type` - Type of boolean operation
 /// * `subject_fill_type` - Fill rule for subject polygons
 /// * `clip_fill_type` - Fill rule for clip polygons
@@ -394,7 +395,7 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
     _minima_sorted: &[usize],
     _current_lm_idx: &mut usize,
     _minima_list: &LocalMinimumList<T>,
-    _manager: &mut RingManager<T>,
+    manager: &mut RingManager<T>,
     clip_type: Operation,
     subject_fill_type: FillType,
     clip_fill_type: FillType,
@@ -422,25 +423,85 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
         };
 
         // Check if this bound has reached its maxima
-        if is_maxima(bound, scanline_y) {
+        // PORT FROM: C++ lines 77-88 in process_maxima.hpp
+        let mut is_maxima_edge = is_maxima(bound, scanline_y);
+
+        if is_maxima_edge {
             // Find the maxima pair (note: argument order is bound_pos, bounds, ael)
             if let Some(pair_pos) = get_maxima_pair(i, bounds, ael) {
-                // Process the maxima (note: do_maxima takes positions, not indices)
-                do_maxima(
-                    i,
-                    pair_pos,
-                    bounds,
-                    ael,
-                    clip_type,
-                    subject_fill_type,
-                    clip_fill_type,
-                );
-                // do_maxima may have removed entries from ael, so don't increment i
-                continue;
+                // Get the pair's bound index for ring operations
+                let pair_idx = ael.get(pair_pos);
+
+                // CRITICAL: Check if the pair is ALSO at maxima!
+                // From C++ lines 81-82:
+                // is_maxima_edge = ((bnd_max_pair == active_bounds.end() || !current_edge_is_horizontal<T>(bnd_max_pair)) &&
+                //                   is_maxima(bnd_max_pair, top_y));
+                // Both bounds must be at maxima to process as a maxima pair
+                let pair_is_maxima = pair_idx
+                    .and_then(|idx| bounds.get(idx))
+                    .map(|pair_bound| {
+                        // Check: pair's edge is not horizontal AND pair is at maxima
+                        !pair_bound.current_edge().is_horizontal()
+                            && is_maxima(pair_bound, scanline_y)
+                    })
+                    .unwrap_or(false);
+
+                is_maxima_edge = pair_is_maxima;
+
+                if is_maxima_edge {
+                    // Check if both bounds have rings before calling add_local_maximum_point
+                    // From C++: if ((*horz_bound)->ring && (*bound_max_pair)->ring)
+                    let both_have_rings = {
+                        let b1_has_ring = bounds
+                            .get(bound_idx)
+                            .map(|b| b.ring.is_some())
+                            .unwrap_or(false);
+                        let b2_has_ring = pair_idx
+                            .and_then(|idx| bounds.get(idx))
+                            .map(|b| b.ring.is_some())
+                            .unwrap_or(false);
+                        b1_has_ring && b2_has_ring
+                    };
+
+                    if both_have_rings {
+                        if let Some(pair_bound_idx) = pair_idx {
+                            // Get the maximum point (top of current edge)
+                            let max_pt = bounds[bound_idx].current_edge().top;
+
+                            // Add local maximum point to close/merge rings
+                            // PORT FROM: C++ add_local_maximum_point in process_horizontal.hpp
+                            ring_util::add_local_maximum_point(
+                                bound_idx,
+                                pair_bound_idx,
+                                bounds,
+                                ael.as_slice(),
+                                geo_types::Coord {
+                                    x: max_pt.x,
+                                    y: max_pt.y,
+                                },
+                                manager,
+                            );
+                        }
+                    }
+
+                    // Process the maxima (note: do_maxima takes positions, not indices)
+                    do_maxima(
+                        i,
+                        pair_pos,
+                        bounds,
+                        ael,
+                        clip_type,
+                        subject_fill_type,
+                        clip_fill_type,
+                    );
+                    // do_maxima may have removed entries from ael, so don't increment i
+                    continue;
+                }
             }
         }
 
-        // Check for horizontal edges
+        // 2. Promote horizontal edges
+        // PORT FROM: C++ lines 89-101 - if intermediate and next edge is horizontal
         let bound = match bounds.get(bound_idx) {
             Some(b) => b,
             None => {
@@ -449,32 +510,118 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
             }
         };
 
-        if current_edge_is_horizontal(bound) {
-            // Process the horizontal edge
-            process_horizontal(
-                i,
-                bounds,
-                ael,
-                scanline_y,
-                scanbeam,
-                clip_type,
-                subject_fill_type,
-                clip_fill_type,
-            );
-        }
-
-        // Move to next edge if it's at this scanline
-        if let Some(bound) = bounds.get_mut(bound_idx) {
-            if bound.current_edge_index + 1 < bound.edges.len() {
-                let next_edge = &bound.edges[bound.current_edge_index + 1];
-                if next_edge.bot.y == scanline_y {
-                    bound.current_edge_index += 1;
-                    scanbeam.insert(next_edge.top.y);
-                }
+        if is_intermediate(bound, scanline_y) && next_edge_would_be_horizontal(bound) {
+            // PORT FROM: C++ lines 91-97
+            if bound.ring.is_some() {
+                // Insert hot pixels (TODO: implement hot pixel insertion)
+                let edge_top = bound.current_edge().top;
+                ring_util::add_point_to_ring(
+                    bound_idx,
+                    bounds,
+                    geo_types::Coord {
+                        x: edge_top.x,
+                        y: edge_top.y,
+                    },
+                    manager,
+                );
             }
+            // Advance to next edge
+            if let Some(bound) = bounds.get_mut(bound_idx) {
+                bound.current_edge_index += 1;
+                let new_top_y = bound.current_edge().top.y;
+                scanbeam.insert(new_top_y);
+            }
+        } else {
+            // Just update current_x - already done at top of function
         }
 
         i += 1;
+    }
+
+    // 3. Insert horizontal local minima (TODO: implement)
+    // PORT FROM: C++ line 105-106 - insert_horizontal_local_minima_into_ABL
+
+    // Process horizontals
+    // PORT FROM: C++ line 108
+    process_horizontals(
+        bounds,
+        ael,
+        scanline_y,
+        scanbeam,
+        clip_type,
+        subject_fill_type,
+        clip_fill_type,
+    );
+
+    // 4. Promote intermediate vertices
+    // PORT FROM: C++ lines 112-119
+    // This is the critical step that adds polygon vertices to rings!
+    let debug = std::env::var("WAGYU_DEBUG").is_ok();
+    if debug {
+        eprintln!(
+            "DEBUG: step4 start - AEL len={} scanline_y={:?}",
+            ael.len(),
+            scanline_y.to_f64()
+        );
+    }
+    for i in 0..ael.len() {
+        let bound_idx = match ael.get(i) {
+            Some(idx) => idx,
+            None => continue,
+        };
+
+        let bound = match bounds.get(bound_idx) {
+            Some(b) => b,
+            None => continue,
+        };
+
+        let edge_top_y = bound.current_edge().top.y;
+        let has_more_edges = bound.current_edge_index + 1 < bound.edges.len();
+        let is_at_top = edge_top_y == scanline_y;
+
+        if debug {
+            eprintln!(
+                "DEBUG: step4 bound {} edge_top_y={:?} scanline_y={:?} has_more_edges={} is_at_top={} ring={:?}",
+                bound_idx,
+                edge_top_y.to_f64(),
+                scanline_y.to_f64(),
+                has_more_edges,
+                is_at_top,
+                bound.ring
+            );
+        }
+
+        if is_intermediate(bound, scanline_y) {
+            // Add the edge top point to the ring BEFORE advancing to the next edge
+            // This is the vertex that connects the current edge to the next edge
+            if bound.ring.is_some() {
+                let edge_top = bound.current_edge().top;
+                if debug {
+                    eprintln!(
+                        "DEBUG: Adding intermediate vertex ({}, {}) to bound {} ring {:?}",
+                        edge_top.x.to_f64().unwrap_or(0.0),
+                        edge_top.y.to_f64().unwrap_or(0.0),
+                        bound_idx,
+                        bound.ring
+                    );
+                }
+                ring_util::add_point_to_ring(
+                    bound_idx,
+                    bounds,
+                    geo_types::Coord {
+                        x: edge_top.x,
+                        y: edge_top.y,
+                    },
+                    manager,
+                );
+            }
+            // Advance to next edge (next_edge_in_bound)
+            if let Some(bound) = bounds.get_mut(bound_idx) {
+                bound.current_edge_index += 1;
+                let new_top_y = bound.current_edge().top.y;
+                scanbeam.insert(new_top_y);
+            }
+        }
     }
 }
 
