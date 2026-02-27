@@ -22,7 +22,7 @@ use crate::build_result::RingManager;
 use crate::config::{FillType, HorizontalDirection};
 use crate::intersect_util::get_current_x;
 use crate::local_minimum::LocalMinimumList;
-use crate::process_maxima::{do_maxima, get_maxima_pair, is_maxima};
+use crate::process_maxima::{do_maxima, get_maxima_pair, is_intermediate, is_maxima};
 use crate::ring_util;
 use crate::scanbeam::Scanbeam;
 use crate::Operation;
@@ -476,7 +476,8 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
             }
         }
 
-        // Check for horizontal edges
+        // 2. Promote horizontal edges
+        // PORT FROM: C++ lines 89-101 - if intermediate and next edge is horizontal
         let bound = match bounds.get(bound_idx) {
             Some(b) => b,
             None => {
@@ -485,11 +486,10 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
             }
         };
 
-        if current_edge_is_horizontal(bound) {
-            // Add current position to ring before processing horizontal
-            // PORT FROM: C++ process_horizontal adds points during traversal
+        if is_intermediate(bound, scanline_y) && next_edge_would_be_horizontal(bound) {
+            // PORT FROM: C++ lines 91-97
             if bound.ring.is_some() {
-                // Add the edge top point when we finish processing
+                // Insert hot pixels (TODO: implement hot pixel insertion)
                 let edge_top = bound.current_edge().top;
                 ring_util::add_point_to_ring(
                     bound_idx,
@@ -498,32 +498,100 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
                     manager,
                 );
             }
-
-            // Process the horizontal edge
-            process_horizontal(
-                i,
-                bounds,
-                ael,
-                scanline_y,
-                scanbeam,
-                clip_type,
-                subject_fill_type,
-                clip_fill_type,
-            );
-        }
-
-        // Move to next edge if it's at this scanline
-        if let Some(bound) = bounds.get_mut(bound_idx) {
-            if bound.current_edge_index + 1 < bound.edges.len() {
-                let next_edge = &bound.edges[bound.current_edge_index + 1];
-                if next_edge.bot.y == scanline_y {
-                    bound.current_edge_index += 1;
-                    scanbeam.insert(next_edge.top.y);
-                }
+            // Advance to next edge
+            if let Some(bound) = bounds.get_mut(bound_idx) {
+                bound.current_edge_index += 1;
+                let new_top_y = bound.current_edge().top.y;
+                scanbeam.insert(new_top_y);
             }
+        } else {
+            // Just update current_x - already done at top of function
         }
 
         i += 1;
+    }
+
+    // 3. Insert horizontal local minima (TODO: implement)
+    // PORT FROM: C++ line 105-106 - insert_horizontal_local_minima_into_ABL
+
+    // Process horizontals
+    // PORT FROM: C++ line 108
+    process_horizontals(
+        bounds,
+        ael,
+        scanline_y,
+        scanbeam,
+        clip_type,
+        subject_fill_type,
+        clip_fill_type,
+    );
+
+    // 4. Promote intermediate vertices
+    // PORT FROM: C++ lines 112-119
+    // This is the critical step that adds polygon vertices to rings!
+    let debug = std::env::var("WAGYU_DEBUG").is_ok();
+    if debug {
+        eprintln!(
+            "DEBUG: step4 start - AEL len={} scanline_y={:?}",
+            ael.len(),
+            scanline_y.to_f64()
+        );
+    }
+    for i in 0..ael.len() {
+        let bound_idx = match ael.get(i) {
+            Some(idx) => idx,
+            None => continue,
+        };
+
+        let bound = match bounds.get(bound_idx) {
+            Some(b) => b,
+            None => continue,
+        };
+
+        let edge_top_y = bound.current_edge().top.y;
+        let has_more_edges = bound.current_edge_index + 1 < bound.edges.len();
+        let is_at_top = edge_top_y == scanline_y;
+
+        if debug {
+            eprintln!(
+                "DEBUG: step4 bound {} edge_top_y={:?} scanline_y={:?} has_more_edges={} is_at_top={} ring={:?}",
+                bound_idx,
+                edge_top_y.to_f64(),
+                scanline_y.to_f64(),
+                has_more_edges,
+                is_at_top,
+                bound.ring
+            );
+        }
+
+        if is_intermediate(bound, scanline_y) {
+            // Add the edge top point to the ring BEFORE advancing to the next edge
+            // This is the vertex that connects the current edge to the next edge
+            if bound.ring.is_some() {
+                let edge_top = bound.current_edge().top;
+                if debug {
+                    eprintln!(
+                        "DEBUG: Adding intermediate vertex ({}, {}) to bound {} ring {:?}",
+                        edge_top.x.to_f64().unwrap_or(0.0),
+                        edge_top.y.to_f64().unwrap_or(0.0),
+                        bound_idx,
+                        bound.ring
+                    );
+                }
+                ring_util::add_point_to_ring(
+                    bound_idx,
+                    bounds,
+                    geo_types::Coord { x: edge_top.x, y: edge_top.y },
+                    manager,
+                );
+            }
+            // Advance to next edge (next_edge_in_bound)
+            if let Some(bound) = bounds.get_mut(bound_idx) {
+                bound.current_edge_index += 1;
+                let new_top_y = bound.current_edge().top.y;
+                scanbeam.insert(new_top_y);
+            }
+        }
     }
 }
 

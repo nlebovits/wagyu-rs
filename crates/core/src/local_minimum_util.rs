@@ -210,6 +210,18 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
         let right_idx = bounds.len();
         bounds.push(right_bound);
 
+        // Link maximum_bound for simple cases where left and right meet at the same max
+        // PORT FROM: wagyu/include/mapbox/geometry/wagyu/local_minimum_util.hpp
+        // For simple polygons, the left and right bounds of a local minimum share
+        // the same maximum point, so we link them together.
+        // Note: For complex multi-minima rings, this needs additional linking logic.
+        let left_max_top = bounds[left_idx].edges.last().map(|e| e.top);
+        let right_max_top = bounds[right_idx].edges.last().map(|e| e.top);
+        if left_max_top == right_max_top {
+            bounds[left_idx].maximum_bound = Some(right_idx);
+            bounds[right_idx].maximum_bound = Some(left_idx);
+        }
+
         // Insert into AEL
         // From C++: insert_lm_left_and_right_bound(left_bound, right_bound, active_bounds, ...)
         ael.insert_pair(left_idx, right_idx, bounds);
@@ -229,6 +241,37 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
         };
         bounds[right_idx].winding_count = left_wc;
         bounds[right_idx].winding_count2 = left_wc2;
+
+        // DEBUG: Trace local minimum insertion
+        if std::env::var("WAGYU_DEBUG").is_ok() {
+            let bot = bounds[left_idx].current_edge().bot;
+            let poly_type = bounds[left_idx].poly_type;
+            let contributing = winding::is_contributing(
+                &bounds[left_idx],
+                cliptype,
+                subject_fill_type,
+                clip_fill_type,
+            );
+            eprintln!(
+                "DEBUG: LM at ({},{}) poly_type={:?} wc={} wc2={} contributing={}",
+                bot.x.to_f64().unwrap_or(0.0),
+                bot.y.to_f64().unwrap_or(0.0),
+                poly_type,
+                left_wc,
+                left_wc2,
+                contributing
+            );
+            eprintln!("DEBUG: AEL state: {:?}", ael.as_slice());
+            for (i, &idx) in ael.as_slice().iter().enumerate() {
+                eprintln!(
+                    "DEBUG:   [{}] bound {} at x={:.2} poly_type={:?}",
+                    i,
+                    idx,
+                    bounds[idx].current_x,
+                    bounds[idx].poly_type
+                );
+            }
+        }
 
         // Check if this local minimum contributes to output
         // From C++: if (is_contributing(left_bound, cliptype, subject_fill_type, clip_fill_type))

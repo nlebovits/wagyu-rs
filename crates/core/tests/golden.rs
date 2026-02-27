@@ -142,10 +142,26 @@ fn run_golden_test(test_name: &str, operation: Operation) {
         eprintln!("\nExpected ({} polygons):", expected.0.len());
         for (i, poly) in expected.0.iter().enumerate() {
             eprintln!("  Polygon {}: {} rings", i, poly.interiors().len() + 1);
+            let coords: Vec<_> = poly.exterior().coords().collect();
+            eprintln!("  Exterior coords ({}):", coords.len());
+            for (j, c) in coords.iter().take(10).enumerate() {
+                eprintln!("    {}: ({}, {})", j, c.x, c.y);
+            }
+            if coords.len() > 10 {
+                eprintln!("    ... and {} more", coords.len() - 10);
+            }
         }
         eprintln!("\nGot ({} polygons):", result.0.len());
         for (i, poly) in result.0.iter().enumerate() {
             eprintln!("  Polygon {}: {} rings", i, poly.interiors().len() + 1);
+            let coords: Vec<_> = poly.exterior().coords().collect();
+            eprintln!("  Exterior coords ({}):", coords.len());
+            for (j, c) in coords.iter().take(10).enumerate() {
+                eprintln!("    {}: ({}, {})", j, c.x, c.y);
+            }
+            if coords.len() > 10 {
+                eprintln!("    ... and {} more", coords.len() - 10);
+            }
         }
         panic!("Golden test failed: {}-{}", op_name(operation), test_name);
     }

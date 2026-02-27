@@ -115,6 +115,17 @@ pub struct Bound<T: CoordNum> {
     ///
     /// Used to avoid adding duplicate points to rings.
     pub last_point: Point<T>,
+
+    /// Index of the bound that shares this bound's local maximum.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/bound.hpp - maximum_bound
+    ///
+    /// When bounds are created from a polygon ring, they are paired at their
+    /// local maximum (top point). This field stores the index of the paired bound
+    /// so it can be found in O(1) during maxima processing.
+    ///
+    /// Set during `build_local_minima_list` when edges are built from polygon rings.
+    pub maximum_bound: Option<usize>,
 }
 
 impl<T: CoordNum> Bound<T> {
@@ -149,6 +160,7 @@ impl<T: CoordNum> Bound<T> {
             winding_delta,
             ring: None,
             last_point,
+            maximum_bound: None,
         }
     }
 
@@ -182,6 +194,7 @@ impl<T: CoordNum> Bound<T> {
             winding_delta,
             ring: None,
             last_point,
+            maximum_bound: None,
         }
     }
 
@@ -208,6 +221,7 @@ impl<T: CoordNum> Bound<T> {
             winding_delta: 0,
             ring: None,
             last_point: origin,
+            maximum_bound: None,
         }
     }
 
