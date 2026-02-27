@@ -332,16 +332,22 @@ pub fn add_ring_to_local_minima_list<T: CoordNum>(
         }
 
         // Create bounds and local minimum
+        // PORT FROM: wagyu/include/mapbox/geometry/wagyu/local_minimum_util.hpp lines 262-276
+        // winding_delta is an INVARIANT property based on bound direction:
+        //   to_minimum → winding_delta = -1 (bound travels toward minimum)
+        //   to_maximum → winding_delta = +1 (bound travels toward maximum)
+        // This is INDEPENDENT of which side (Left/Right) the bound is assigned to.
+        // The side can change via swap_sides() during the algorithm, but winding_delta must not.
         if !to_minimum.is_empty() && !to_maximum.is_empty() {
             let (left_bound, right_bound) = if minimum_is_left {
                 (
-                    Bound::new(to_minimum, poly_type, EdgeSide::Left),
-                    Bound::new(to_maximum, poly_type, EdgeSide::Right),
+                    Bound::new_with_delta(to_minimum, poly_type, EdgeSide::Left, -1), // to_minimum always -1
+                    Bound::new_with_delta(to_maximum, poly_type, EdgeSide::Right, 1), // to_maximum always +1
                 )
             } else {
                 (
-                    Bound::new(to_maximum, poly_type, EdgeSide::Left),
-                    Bound::new(to_minimum, poly_type, EdgeSide::Right),
+                    Bound::new_with_delta(to_maximum, poly_type, EdgeSide::Left, 1), // to_maximum always +1
+                    Bound::new_with_delta(to_minimum, poly_type, EdgeSide::Right, -1), // to_minimum always -1
                 )
             };
 

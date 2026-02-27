@@ -314,7 +314,6 @@ fn get_fill_type<T: CoordNum>(
 }
 
 /// Get the "other" fill type for a bound (the fill type of the other polygon type).
-#[allow(dead_code)]
 fn get_fill_type2<T: CoordNum>(
     bound: &Bound<T>,
     subject_fill_type: FillType,
@@ -347,13 +346,11 @@ pub fn update_winding_counts<T: CoordNum>(
             std::mem::swap(&mut b1.winding_count, &mut b2.winding_count);
         } else {
             // Non-zero fill type
-            // DIVERGENCE FROM WAGYU: Simplified winding delta derivation
-            // The C++ uses `winding_delta` field from edge direction.
-            // We derive it from EdgeSide, which may differ in edge cases
-            // where side assignments change during algorithm execution.
-            // TODO: Track winding_delta as intrinsic edge property for full parity.
-            let b1_delta = if b1.side == EdgeSide::Left { 1 } else { -1 };
-            let b2_delta = if b2.side == EdgeSide::Left { 1 } else { -1 };
+            // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp lines 91-102
+            // Use the stored winding_delta (invariant property of the bound direction)
+            // NOT derived from side, which can change via swap_sides().
+            let b1_delta = b1.winding_delta;
+            let b2_delta = b2.winding_delta;
 
             if b1.winding_count + b2_delta == 0 {
                 b1.winding_count = -b1.winding_count;
@@ -368,15 +365,15 @@ pub fn update_winding_counts<T: CoordNum>(
         }
     } else {
         // Different polygon types
+        // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp lines 103-116
+        // Use stored winding_delta instead of deriving from side
         if !is_even_odd_fill_type(b2, subject_fill_type, clip_fill_type) {
-            let b2_delta = if b2.side == EdgeSide::Left { 1 } else { -1 };
-            b1.winding_count2 += b2_delta;
+            b1.winding_count2 += b2.winding_delta;
         } else {
             b1.winding_count2 = if b1.winding_count2 == 0 { 1 } else { 0 };
         }
         if !is_even_odd_fill_type(b1, subject_fill_type, clip_fill_type) {
-            let b1_delta = if b1.side == EdgeSide::Left { 1 } else { -1 };
-            b2.winding_count2 -= b1_delta;
+            b2.winding_count2 -= b1.winding_delta;
         } else {
             b2.winding_count2 = if b2.winding_count2 == 0 { 1 } else { 0 };
         }
@@ -652,12 +649,18 @@ pub fn intersect_bounds<T: CoordNum>(
         if b2_wc == 0 || b2_wc == 1 {
             // Add point to b1's ring before swapping
             add_point(b1, pt, manager);
+            // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp line 205
+            // Also update b2's last_point even though it's not contributing
+            b2.last_point = pt;
 
             swap_sides(b1, b2);
             swap_rings(b1, b2);
         }
     } else if b2_contributing {
         if b1_wc == 0 || b1_wc == 1 {
+            // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp line 211
+            // Update b1's last_point even though it's not contributing
+            b1.last_point = pt;
             // Add point to b2's ring before swapping
             add_point(b2, pt, manager);
 
@@ -666,10 +669,46 @@ pub fn intersect_bounds<T: CoordNum>(
         }
     } else if (b1_wc == 0 || b1_wc == 1) && (b2_wc == 0 || b2_wc == 1) {
         // Neither contributing - may start a new output region
+        // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp lines 217-270
         if b1.poly_type != b2.poly_type {
-            // Different polygon types - add local minimum point to start output
+            // Different polygon types - always add local minimum point
             add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+        } else if b1_wc == 1 && b2_wc == 1 {
+            // Same polygon type, both with winding count 1
+            // Calculate effective winding_count2 based on fill type
+            let b1_fill_type2 = get_fill_type2(b1, subject_fill_type, clip_fill_type);
+            let b2_fill_type2 = get_fill_type2(b2, subject_fill_type, clip_fill_type);
+            let b1_wc2 = get_winding_count(b1.winding_count2, b1_fill_type2);
+            let b2_wc2 = get_winding_count(b2.winding_count2, b2_fill_type2);
+
+            match cliptype {
+                Operation::Intersection => {
+                    if b1_wc2 > 0 && b2_wc2 > 0 {
+                        add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                    }
+                }
+                Operation::Union => {
+                    if b1_wc2 <= 0 && b2_wc2 <= 0 {
+                        add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                    }
+                }
+                Operation::Difference => {
+                    // For difference: depends on polygon type and winding_count2
+                    let should_add = match b1.poly_type {
+                        PolygonType::Clip => b1_wc2 > 0 && b2_wc2 > 0,
+                        PolygonType::Subject => b1_wc2 <= 0 && b2_wc2 <= 0,
+                    };
+                    if should_add {
+                        add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                    }
+                }
+                Operation::Xor => {
+                    // XOR always starts a new ring for same-type bounds at wc=1
+                    add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                }
+            }
         } else {
+            // b1_wc != 1 || b2_wc != 1, just swap sides
             swap_sides(b1, b2);
         }
     }

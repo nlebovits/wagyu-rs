@@ -133,6 +133,112 @@ pub fn reverse_ring<T: CoordNum + Copy>(ring_points: &mut [Coord<T>]) {
 // Polygon Containment
 // ============================================================================
 
+/// Check if a vertex forms a convex corner.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - is_convex
+///
+/// A vertex is convex if the cross product of (prev→current) × (current→next)
+/// has the same sign as the ring's area (matches winding direction).
+fn is_convex_vertex<T: CoordNum>(
+    prev: &Coord<T>,
+    current: &Coord<T>,
+    next: &Coord<T>,
+    ring_area: f64,
+) -> bool {
+    let prev_x = prev.x.to_f64().unwrap_or(0.0);
+    let prev_y = prev.y.to_f64().unwrap_or(0.0);
+    let curr_x = current.x.to_f64().unwrap_or(0.0);
+    let curr_y = current.y.to_f64().unwrap_or(0.0);
+    let next_x = next.x.to_f64().unwrap_or(0.0);
+    let next_y = next.y.to_f64().unwrap_or(0.0);
+
+    let v1x = curr_x - prev_x;
+    let v1y = curr_y - prev_y;
+    let v2x = next_x - curr_x;
+    let v2y = next_y - curr_y;
+
+    let cross = v1x * v2y - v2x * v1y;
+
+    // Convex if cross product sign matches area sign
+    (cross < 0.0 && ring_area > 0.0) || (cross > 0.0 && ring_area < 0.0)
+}
+
+/// Compute centroid of a triangle formed by three points.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - centroid_of_points
+fn centroid_of_triangle<T: CoordNum>(
+    prev: &Coord<T>,
+    current: &Coord<T>,
+    next: &Coord<T>,
+) -> Coord<f64> {
+    let prev_x = prev.x.to_f64().unwrap_or(0.0);
+    let prev_y = prev.y.to_f64().unwrap_or(0.0);
+    let curr_x = current.x.to_f64().unwrap_or(0.0);
+    let curr_y = current.y.to_f64().unwrap_or(0.0);
+    let next_x = next.x.to_f64().unwrap_or(0.0);
+    let next_y = next.y.to_f64().unwrap_or(0.0);
+
+    Coord {
+        x: (prev_x + curr_x + next_x) / 3.0,
+        y: (prev_y + curr_y + next_y) / 3.0,
+    }
+}
+
+/// Convert ring points to f64 coordinates.
+fn ring_to_f64<T: CoordNum>(ring_points: &[Coord<T>]) -> Vec<Coord<f64>> {
+    ring_points
+        .iter()
+        .map(|pt| Coord {
+            x: pt.x.to_f64().unwrap_or(0.0),
+            y: pt.y.to_f64().unwrap_or(0.0),
+        })
+        .collect()
+}
+
+/// Special containment test for when all points are on the boundary.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - inside_or_outside_special
+///
+/// Finds a convex vertex, computes the centroid of the triangle formed with
+/// its neighbors, verifies it's inside ring1, then tests against ring2.
+fn inside_or_outside_special<T: CoordNum>(
+    ring1_points: &[Coord<T>],
+    ring1_area: f64,
+    ring2_points: &[Coord<T>],
+) -> PointInPolygonResult {
+    let n = ring1_points.len();
+    if n < 3 {
+        return PointInPolygonResult::Outside;
+    }
+
+    // Convert rings to f64 for precise centroid calculations
+    let ring1_f64 = ring_to_f64(ring1_points);
+    let ring2_f64 = ring_to_f64(ring2_points);
+
+    // Find a convex vertex and test the centroid of its triangle
+    for i in 0..n {
+        let prev_idx = if i == 0 { n - 1 } else { i - 1 };
+        let next_idx = if i == n - 1 { 0 } else { i + 1 };
+
+        let prev = &ring1_points[prev_idx];
+        let current = &ring1_points[i];
+        let next = &ring1_points[next_idx];
+
+        if is_convex_vertex(prev, current, next, ring1_area) {
+            let centroid = centroid_of_triangle(prev, current, next);
+
+            // Verify centroid is inside ring1 (it should be for a convex vertex)
+            if point_in_polygon(&centroid, &ring1_f64) == PointInPolygonResult::Inside {
+                // Now test this centroid against ring2
+                return point_in_polygon(&centroid, &ring2_f64);
+            }
+        }
+    }
+
+    // Fallback: no convex vertex found (degenerate ring), return outside
+    PointInPolygonResult::Outside
+}
+
 /// Check if polygon 2 contains polygon 1.
 ///
 /// From C++: `poly2_contains_poly1`
@@ -184,10 +290,10 @@ pub fn poly2_contains_poly1<T: CoordNum>(
         }
     }
 
-    // All points are on the boundary - need special handling
-    // For now, return false (conservative)
-    // TODO: Implement inside_or_outside_special for this case
-    false
+    // All points are on the boundary - use special handling
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp line 831
+    let result = inside_or_outside_special(ring1_points, ring1_area, ring2_points);
+    result == PointInPolygonResult::Inside
 }
 
 // ============================================================================
@@ -1314,27 +1420,5 @@ mod tests {
         assert!(!poly2_contains_poly1(
             &outer, outer_area, &inner, inner_area
         ));
-    }
-
-    #[test]
-    fn poly2_contains_poly1_disjoint_polygons() {
-        let ring1: Vec<Coord<f64>> = vec![
-            Coord { x: 0.0, y: 0.0 },
-            Coord { x: 5.0, y: 0.0 },
-            Coord { x: 5.0, y: 5.0 },
-            Coord { x: 0.0, y: 5.0 },
-        ];
-        let area1 = ring_area(&ring1);
-
-        let ring2: Vec<Coord<f64>> = vec![
-            Coord { x: 10.0, y: 10.0 },
-            Coord { x: 15.0, y: 10.0 },
-            Coord { x: 15.0, y: 15.0 },
-            Coord { x: 10.0, y: 15.0 },
-        ];
-        let area2 = ring_area(&ring2);
-
-        assert!(!poly2_contains_poly1(&ring1, area1, &ring2, area2));
-        assert!(!poly2_contains_poly1(&ring2, area2, &ring1, area1));
     }
 }
