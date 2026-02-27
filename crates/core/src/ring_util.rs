@@ -659,7 +659,10 @@ pub fn add_point_to_ring<T: CoordNum + Copy>(
                 "DEBUG: Ring 1 state after add: {:?}",
                 ring.points()
                     .iter()
-                    .map(|c| (c.x.to_f64().unwrap_or(0.0) as i64, c.y.to_f64().unwrap_or(0.0) as i64))
+                    .map(|c| (
+                        c.x.to_f64().unwrap_or(0.0) as i64,
+                        c.y.to_f64().unwrap_or(0.0) as i64
+                    ))
                     .collect::<Vec<_>>()
             );
         }
