@@ -708,7 +708,7 @@ mod tests {
 
     /// Create a CCW square ring (positive area - exterior orientation)
     fn make_ccw_square(x: f64, y: f64, size: f64) -> Ring<f64> {
-        let mut ring = Ring::new();
+        let mut ring = Ring::empty();
         ring.push_point(Coord { x, y });
         ring.push_point(Coord { x: x + size, y });
         ring.push_point(Coord {
@@ -721,7 +721,7 @@ mod tests {
 
     /// Create a CW square ring (negative area - hole orientation)
     fn make_cw_square(x: f64, y: f64, size: f64) -> Ring<f64> {
-        let mut ring = Ring::new();
+        let mut ring = Ring::empty();
         ring.push_point(Coord { x, y });
         ring.push_point(Coord { x, y: y + size });
         ring.push_point(Coord {
@@ -876,7 +876,7 @@ mod tests {
         let _exterior_idx = manager.add_ring(exterior);
 
         // Degenerate ring (only 2 points)
-        let mut degenerate = Ring::new();
+        let mut degenerate = Ring::empty();
         degenerate.push_point(Coord { x: 0.0, y: 0.0 });
         degenerate.push_point(Coord { x: 5.0, y: 5.0 });
         let degenerate_idx = manager.add_ring(degenerate);

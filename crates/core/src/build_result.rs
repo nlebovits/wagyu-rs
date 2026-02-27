@@ -282,7 +282,7 @@ mod tests {
     // ==================== Helper Functions ====================
 
     fn make_square_ring(size: f64) -> Ring<f64> {
-        let mut ring = Ring::new();
+        let mut ring = Ring::empty();
         ring.push_point(Coord { x: 0.0, y: 0.0 });
         ring.push_point(Coord { x: size, y: 0.0 });
         ring.push_point(Coord { x: size, y: size });
@@ -291,7 +291,7 @@ mod tests {
     }
 
     fn make_square_ring_at(x: f64, y: f64, size: f64) -> Ring<f64> {
-        let mut ring = Ring::new();
+        let mut ring = Ring::empty();
         ring.push_point(Coord { x, y });
         ring.push_point(Coord { x: x + size, y });
         ring.push_point(Coord {
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn ring_to_linestring_empty_ring_returns_empty_linestring() {
-        let ring: Ring<f64> = Ring::new();
+        let ring: Ring<f64> = Ring::empty();
         let ls = ring_to_linestring(&ring, false);
         assert!(ls.0.is_empty());
     }
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn ring_to_linestring_already_closed_ring_not_doubled() {
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.push_point(Coord { x: 0.0, y: 0.0 });
         ring.push_point(Coord { x: 10.0, y: 0.0 });
         ring.push_point(Coord { x: 10.0, y: 10.0 });

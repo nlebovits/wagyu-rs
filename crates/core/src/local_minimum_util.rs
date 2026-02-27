@@ -140,6 +140,277 @@ use crate::local_minimum::LocalMinimumList;
 use crate::Operation;
 use num_traits::ToPrimitive;
 
+// These functions will be implemented by other agents in winding.rs and ring operations module.
+// For now, we declare them as stubs that will be wired up when those modules are complete.
+
+/// Set the winding count for a bound based on bounds to its left in the AEL.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/active_bound_list.hpp - set_winding_count
+///
+/// This traverses backwards through the AEL to find bounds of the same polygon type,
+/// and sets the winding count based on fill rules.
+///
+/// # Arguments
+/// * `bound_pos` - Position of the bound in the AEL
+/// * `bounds` - All bounds
+/// * `ael` - Active edge list
+/// * `subject_fill_type` - Fill rule for subject polygons
+/// * `clip_fill_type` - Fill rule for clip polygons
+fn set_winding_count<T: CoordNum>(
+    bound_pos: usize,
+    bounds: &mut [Bound<T>],
+    ael: &ActiveEdgeList,
+    subject_fill_type: FillType,
+    clip_fill_type: FillType,
+) {
+    // Get the bound index from AEL position
+    let bound_idx = match ael.get(bound_pos) {
+        Some(idx) => idx,
+        None => return,
+    };
+
+    // If this is the first bound in AEL, initialize with winding_delta
+    if bound_pos == 0 {
+        if let Some(bound) = bounds.get_mut(bound_idx) {
+            bound.winding_count = bound.winding_delta;
+            bound.winding_count2 = 0;
+        }
+        return;
+    }
+
+    // Find the previous bound of the same poly_type
+    let poly_type = bounds.get(bound_idx).map(|b| b.poly_type);
+    let mut prev_same_type_pos: Option<usize> = None;
+
+    for i in (0..bound_pos).rev() {
+        if let Some(prev_idx) = ael.get(i) {
+            if let Some(prev_bound) = bounds.get(prev_idx) {
+                if Some(prev_bound.poly_type) == poly_type {
+                    prev_same_type_pos = Some(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    let bound = match bounds.get(bound_idx) {
+        Some(b) => b,
+        None => return,
+    };
+    let is_even_odd =
+        crate::intersect_util::is_even_odd_fill_type(bound, subject_fill_type, clip_fill_type);
+
+    match prev_same_type_pos {
+        None => {
+            // No previous bound of same type
+            if let Some(bound) = bounds.get_mut(bound_idx) {
+                bound.winding_count = bound.winding_delta;
+                bound.winding_count2 = 0;
+            }
+        }
+        Some(prev_pos) => {
+            let prev_idx = ael.get(prev_pos).unwrap();
+            let prev_wc = bounds.get(prev_idx).map(|b| b.winding_count).unwrap_or(0);
+            let prev_wc2 = bounds.get(prev_idx).map(|b| b.winding_count2).unwrap_or(0);
+            let prev_wd = bounds.get(prev_idx).map(|b| b.winding_delta).unwrap_or(0);
+
+            if is_even_odd {
+                // EvenOdd filling
+                if let Some(bound) = bounds.get_mut(bound_idx) {
+                    bound.winding_count = bound.winding_delta;
+                    bound.winding_count2 = prev_wc2;
+                }
+            } else {
+                // NonZero, Positive or Negative filling
+                let wd = bounds.get(bound_idx).map(|b| b.winding_delta).unwrap_or(0);
+
+                if prev_wc * prev_wd < 0 {
+                    // prev edge is 'decreasing' toward zero
+                    if prev_wc.abs() > 1 {
+                        if prev_wd * wd < 0 {
+                            if let Some(bound) = bounds.get_mut(bound_idx) {
+                                bound.winding_count = prev_wc;
+                            }
+                        } else if let Some(bound) = bounds.get_mut(bound_idx) {
+                            bound.winding_count = prev_wc + wd;
+                        }
+                    } else if let Some(bound) = bounds.get_mut(bound_idx) {
+                        bound.winding_count = wd;
+                    }
+                } else {
+                    // prev edge is 'increasing' away from zero
+                    if prev_wd * wd < 0 {
+                        if let Some(bound) = bounds.get_mut(bound_idx) {
+                            bound.winding_count = prev_wc;
+                        }
+                    } else if let Some(bound) = bounds.get_mut(bound_idx) {
+                        bound.winding_count = prev_wc + wd;
+                    }
+                }
+                if let Some(bound) = bounds.get_mut(bound_idx) {
+                    bound.winding_count2 = prev_wc2;
+                }
+            }
+
+            // Update winding_count2 based on bounds between prev_pos and bound_pos
+            let is_even_odd_alt = {
+                let bound = bounds.get(bound_idx).unwrap();
+                crate::intersect_util::is_even_odd_fill_type_alt(
+                    bound,
+                    subject_fill_type,
+                    clip_fill_type,
+                )
+            };
+
+            for i in (prev_pos + 1)..bound_pos {
+                if let Some(middle_idx) = ael.get(i) {
+                    if is_even_odd_alt {
+                        if let Some(bound) = bounds.get_mut(bound_idx) {
+                            bound.winding_count2 = if bound.winding_count2 == 0 { 1 } else { 0 };
+                        }
+                    } else if let Some(middle) = bounds.get(middle_idx) {
+                        let middle_wd = middle.winding_delta;
+                        if let Some(bound) = bounds.get_mut(bound_idx) {
+                            bound.winding_count2 += middle_wd;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Check if a bound is contributing to the output.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/active_bound_list.hpp - is_contributing
+///
+/// A bound contributes to output based on its winding counts and the operation type.
+///
+/// # Arguments
+/// * `bound` - The bound to check
+/// * `cliptype` - Boolean operation type
+/// * `subject_fill_type` - Fill rule for subject polygons
+/// * `clip_fill_type` - Fill rule for clip polygons
+fn is_contributing<T: CoordNum>(
+    bound: &Bound<T>,
+    cliptype: Operation,
+    subject_fill_type: FillType,
+    clip_fill_type: FillType,
+) -> bool {
+    use crate::config::PolygonType;
+
+    let (pft, pft2) = if bound.poly_type == PolygonType::Subject {
+        (subject_fill_type, clip_fill_type)
+    } else {
+        (clip_fill_type, subject_fill_type)
+    };
+
+    // Check primary fill type
+    match pft {
+        FillType::EvenOdd => {}
+        FillType::NonZero => {
+            if bound.winding_count.abs() != 1 {
+                return false;
+            }
+        }
+        FillType::Positive => {
+            if bound.winding_count != 1 {
+                return false;
+            }
+        }
+        FillType::Negative => {
+            if bound.winding_count != -1 {
+                return false;
+            }
+        }
+    }
+
+    // Check based on clip type and secondary fill type
+    match cliptype {
+        Operation::Intersection => match pft2 {
+            FillType::EvenOdd | FillType::NonZero => bound.winding_count2 != 0,
+            FillType::Positive => bound.winding_count2 > 0,
+            FillType::Negative => bound.winding_count2 < 0,
+        },
+        Operation::Union => match pft2 {
+            FillType::EvenOdd | FillType::NonZero => bound.winding_count2 == 0,
+            FillType::Positive => bound.winding_count2 <= 0,
+            FillType::Negative => bound.winding_count2 >= 0,
+        },
+        Operation::Difference => {
+            if bound.poly_type == PolygonType::Subject {
+                match pft2 {
+                    FillType::EvenOdd | FillType::NonZero => bound.winding_count2 == 0,
+                    FillType::Positive => bound.winding_count2 <= 0,
+                    FillType::Negative => bound.winding_count2 >= 0,
+                }
+            } else {
+                match pft2 {
+                    FillType::EvenOdd | FillType::NonZero => bound.winding_count2 != 0,
+                    FillType::Positive => bound.winding_count2 > 0,
+                    FillType::Negative => bound.winding_count2 < 0,
+                }
+            }
+        }
+        Operation::Xor => true,
+    }
+}
+
+/// Add a local minimum point connecting two bounds.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - add_local_minimum_point
+///
+/// When two bounds meet at a local minimum and are contributing, this creates
+/// or joins rings. The bound with greater dx becomes the "owner" of the ring.
+///
+/// # Arguments
+/// * `left_idx` - Index of left bound
+/// * `right_idx` - Index of right bound
+/// * `bounds` - All bounds
+/// * `ael` - Active edge list
+/// * `manager` - Ring manager for output
+fn add_local_minimum_point<T: CoordNum>(
+    left_idx: usize,
+    right_idx: usize,
+    bounds: &mut [Bound<T>],
+    _ael: &ActiveEdgeList,
+    manager: &mut RingManager<T>,
+) {
+    // Get the bottom point of the local minimum
+    let bot = {
+        let left = &bounds[left_idx];
+        left.current_edge().bot
+    };
+
+    // Determine which bound gets the ring based on dx comparison
+    // From C++: if horizontal or b1.dx > b2.dx, add to b1; else add to b2
+    let left_dx = bounds[left_idx].current_edge().dx;
+    let right_dx = bounds[right_idx].current_edge().dx;
+    let right_is_horizontal = bounds[right_idx].current_edge().is_horizontal();
+
+    let (primary_idx, secondary_idx, primary_side, secondary_side) =
+        if right_is_horizontal || left_dx > right_dx {
+            (left_idx, right_idx, EdgeSide::Left, EdgeSide::Right)
+        } else {
+            (right_idx, left_idx, EdgeSide::Right, EdgeSide::Left)
+        };
+
+    // Create a new ring and add the point
+    let ring_idx = {
+        let ring = crate::Ring::new(vec![geo_types::Coord { x: bot.x, y: bot.y }]);
+        manager.add_ring(ring)
+    };
+
+    // Set up the bounds with the ring
+    bounds[primary_idx].ring = Some(ring_idx);
+    bounds[primary_idx].side = primary_side;
+    bounds[primary_idx].last_point = bot;
+
+    bounds[secondary_idx].ring = Some(ring_idx);
+    bounds[secondary_idx].side = secondary_side;
+    bounds[secondary_idx].last_point = bot;
+}
+
 /// Insert local minima at the current scanline into the active bound list.
 ///
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/active_bound_list.hpp - insert_local_minima_into_ABL
@@ -153,11 +424,11 @@ use num_traits::ToPrimitive;
 /// * `current_lm_idx` - Current index into minima_sorted (will be incremented)
 /// * `bounds` - Storage for all bounds
 /// * `ael` - Active edge list
-/// * `_manager` - Ring manager (used for contributing edges - simplified in this port)
+/// * `manager` - Ring manager (used for contributing edges)
 /// * `scanbeam` - Scanbeam for adding edge top Y coordinates
-/// * `_cliptype` - Boolean operation type
-/// * `_subject_fill_type` - Fill rule for subject polygons
-/// * `_clip_fill_type` - Fill rule for clip polygons
+/// * `cliptype` - Boolean operation type
+/// * `subject_fill_type` - Fill rule for subject polygons
+/// * `clip_fill_type` - Fill rule for clip polygons
 #[allow(clippy::too_many_arguments)]
 pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
     bot_y: T,
@@ -165,11 +436,11 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
     current_lm_idx: &mut usize,
     bounds: &mut Vec<Bound<T>>,
     ael: &mut ActiveEdgeList,
-    _manager: &mut RingManager<T>,
+    manager: &mut RingManager<T>,
     scanbeam: &mut Scanbeam<T>,
-    _cliptype: Operation,
-    _subject_fill_type: FillType,
-    _clip_fill_type: FillType,
+    cliptype: Operation,
+    subject_fill_type: FillType,
+    clip_fill_type: FillType,
 ) {
     let bot_y_f64 = bot_y.to_f64().unwrap_or(0.0);
 
@@ -212,12 +483,46 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
         // From C++: insert_lm_left_and_right_bound(left_bound, right_bound, active_bounds, ...)
         ael.insert_pair(left_idx, right_idx, bounds);
 
+        // Find position of left bound in AEL for winding count calculation
+        let left_pos = ael.position(left_idx).unwrap_or(0);
+
+        // PORT FROM: C++ insert_lm_left_and_right_bound (lines 340-345)
+        // Set winding count for the left bound based on bounds to its left
+        set_winding_count(left_pos, bounds, ael, subject_fill_type, clip_fill_type);
+
+        // Copy winding counts to right bound (they share the same local minimum)
+        // From C++: (*rb_abl_itr)->winding_count = (*lb_abl_itr)->winding_count;
+        let (left_wc, left_wc2) = {
+            let left = &bounds[left_idx];
+            (left.winding_count, left.winding_count2)
+        };
+        bounds[right_idx].winding_count = left_wc;
+        bounds[right_idx].winding_count2 = left_wc2;
+
+        // Check if this local minimum contributes to output
+        // From C++: if (is_contributing(left_bound, cliptype, subject_fill_type, clip_fill_type))
+        if is_contributing(
+            &bounds[left_idx],
+            cliptype,
+            subject_fill_type,
+            clip_fill_type,
+        ) {
+            // Create ring at this local minimum point
+            // From C++: add_local_minimum_point(...)
+            add_local_minimum_point(left_idx, right_idx, bounds, ael, manager);
+        }
+
         // Add edge tops to scanbeam
         // From C++: insert_sorted_scanbeam(scanbeam, (*lb_abl_itr)->current_edge->top.y)
         let left_top = bounds[left_idx].current_edge().top.y;
         let right_top = bounds[right_idx].current_edge().top.y;
         scanbeam.insert(left_top);
-        scanbeam.insert(right_top);
+
+        // From C++: Only add right edge top if not horizontal
+        // if (!current_edge_is_horizontal<T>(rb_abl_itr))
+        if !bounds[right_idx].current_edge().is_horizontal() {
+            scanbeam.insert(right_top);
+        }
 
         // Move to next local minimum
         *current_lm_idx += 1;
