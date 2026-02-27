@@ -158,6 +158,87 @@ impl<T: CoordNum> RingManager<T> {
             }
         }
     }
+
+    /// Transfer all children from ring2 to ring1 and remove ring2 from hierarchy.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring.hpp - ring1_replaces_ring2 (lines 314-329)
+    ///
+    /// This function:
+    /// 1. Transfers all children from ring2 to ring1 (or top_level_rings if ring1 is None)
+    /// 2. Updates each child's parent pointer to ring1
+    /// 3. Removes ring2 from its parent's children list
+    /// 4. Clears ring2's points
+    ///
+    /// # Arguments
+    /// * `ring1_idx` - Index of the ring to receive children (or None for top-level)
+    /// * `ring2_idx` - Index of the ring being replaced/removed
+    pub fn ring1_replaces_ring2(&mut self, ring1_idx: Option<usize>, ring2_idx: usize) {
+        // Get ring2's children and parent before we start modifying
+        let ring2_children: Vec<usize> = match self.rings.get(ring2_idx) {
+            Some(r) => r.children().to_vec(),
+            None => return,
+        };
+        let ring2_parent = self.rings.get(ring2_idx).and_then(|r| r.parent());
+
+        // Transfer children from ring2 to ring1 (or top_level_rings)
+        for child_idx in ring2_children {
+            // Update child's parent to ring1
+            if let Some(child) = self.rings.get_mut(child_idx) {
+                child.set_parent(ring1_idx);
+            }
+
+            // Add child to ring1's children (or top_level_rings)
+            match ring1_idx {
+                Some(r1_idx) => {
+                    if let Some(ring1) = self.rings.get_mut(r1_idx) {
+                        ring1.add_child(child_idx);
+                    }
+                }
+                None => {
+                    // Add to top-level rings if not already there
+                    if !self.top_level_rings.contains(&child_idx) {
+                        self.top_level_rings.push(child_idx);
+                    }
+                }
+            }
+        }
+
+        // Remove ring2 from its parent's children list
+        match ring2_parent {
+            Some(parent_idx) => {
+                if let Some(parent) = self.rings.get_mut(parent_idx) {
+                    parent.remove_child(ring2_idx);
+                }
+            }
+            None => {
+                // ring2 was a top-level ring, remove from top_level_rings
+                self.top_level_rings.retain(|&idx| idx != ring2_idx);
+            }
+        }
+
+        // Clear ring2's points and children
+        if let Some(ring2) = self.rings.get_mut(ring2_idx) {
+            ring2.points_mut().clear();
+            ring2.clear_children();
+        }
+    }
+
+    /// Check if a ring is a hole based on its area sign.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring.hpp - ring_is_hole
+    ///
+    /// In the wagyu convention:
+    /// - Negative area = clockwise = hole
+    /// - Positive area = counter-clockwise = exterior
+    pub fn ring_is_hole(&self, ring_idx: usize) -> bool {
+        match self.rings.get(ring_idx) {
+            Some(ring) => {
+                // Calculate area using ring_util's ring_area function
+                crate::ring_util::ring_area(ring.points()) < 0.0
+            }
+            None => false,
+        }
+    }
 }
 
 /// Convert a Ring to a LineString (linear ring in geo_types terminology).
@@ -636,5 +717,133 @@ mod tests {
         for poly in &result.0 {
             assert!(poly.interiors().is_empty());
         }
+    }
+
+    // ==================== ring1_replaces_ring2 Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring.hpp tests
+
+    #[test]
+    fn ring1_replaces_ring2_transfers_children_to_ring1() {
+        // Setup: ring0 (parent) -> ring1 (child of ring0)
+        //        ring2 has ring3 as a child
+        // After ring1_replaces_ring2(ring1, ring2):
+        //   ring3 should become child of ring1
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // ring0: exterior
+        let idx0 = manager.add_ring(make_square_ring(100.0));
+
+        // ring1: child of ring0
+        let mut ring1 = make_square_ring(50.0);
+        ring1.set_parent(Some(idx0));
+        let idx1 = manager.add_ring(ring1);
+        manager.get_mut(idx0).unwrap().add_child(idx1);
+
+        // ring2: separate ring with a child
+        let idx2 = manager.add_ring(make_square_ring(40.0));
+
+        // ring3: child of ring2
+        let mut ring3 = make_square_ring(20.0);
+        ring3.set_parent(Some(idx2));
+        let idx3 = manager.add_ring(ring3);
+        manager.get_mut(idx2).unwrap().add_child(idx3);
+
+        // Verify setup
+        assert!(manager.get(idx2).unwrap().children().contains(&idx3));
+        assert_eq!(manager.get(idx3).unwrap().parent(), Some(idx2));
+
+        // Replace ring2 with ring1
+        manager.ring1_replaces_ring2(Some(idx1), idx2);
+
+        // ring3 should now be child of ring1
+        assert!(manager.get(idx1).unwrap().children().contains(&idx3));
+        assert_eq!(manager.get(idx3).unwrap().parent(), Some(idx1));
+
+        // ring2 should have no children and empty points
+        assert!(manager.get(idx2).unwrap().children().is_empty());
+        assert!(manager.get(idx2).unwrap().points().is_empty());
+    }
+
+    #[test]
+    fn ring1_replaces_ring2_with_none_moves_children_to_top_level() {
+        // If ring1 is None, children should become top-level rings
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // ring0: has ring1 as a child
+        let idx0 = manager.add_ring(make_square_ring(100.0));
+
+        let mut ring1 = make_square_ring(50.0);
+        ring1.set_parent(Some(idx0));
+        let idx1 = manager.add_ring(ring1);
+        manager.get_mut(idx0).unwrap().add_child(idx1);
+
+        // Verify ring1 is not top-level initially
+        assert!(!manager.top_level_rings().contains(&idx1));
+
+        // Replace ring0 with None
+        manager.ring1_replaces_ring2(None, idx0);
+
+        // ring1 should now be top-level
+        assert!(manager.top_level_rings().contains(&idx1));
+        assert_eq!(manager.get(idx1).unwrap().parent(), None);
+
+        // ring0 should be cleared
+        assert!(manager.get(idx0).unwrap().children().is_empty());
+        assert!(manager.get(idx0).unwrap().points().is_empty());
+    }
+
+    #[test]
+    fn ring1_replaces_ring2_removes_from_parent_children() {
+        // ring2 should be removed from its parent's children list
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // ring0: parent with ring1 and ring2 as children
+        let idx0 = manager.add_ring(make_square_ring(100.0));
+
+        let mut ring1 = make_square_ring(50.0);
+        ring1.set_parent(Some(idx0));
+        let idx1 = manager.add_ring(ring1);
+        manager.get_mut(idx0).unwrap().add_child(idx1);
+
+        let mut ring2 = make_square_ring(40.0);
+        ring2.set_parent(Some(idx0));
+        let idx2 = manager.add_ring(ring2);
+        manager.get_mut(idx0).unwrap().add_child(idx2);
+
+        // Verify setup: ring0 has both children
+        assert!(manager.get(idx0).unwrap().children().contains(&idx1));
+        assert!(manager.get(idx0).unwrap().children().contains(&idx2));
+
+        // Replace ring2 with ring1 (merge)
+        manager.ring1_replaces_ring2(Some(idx1), idx2);
+
+        // ring0 should no longer have ring2 as a child
+        assert!(manager.get(idx0).unwrap().children().contains(&idx1));
+        assert!(!manager.get(idx0).unwrap().children().contains(&idx2));
+    }
+
+    #[test]
+    fn ring_is_hole_detects_clockwise_as_hole() {
+        // Clockwise winding = negative area = hole
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // CCW ring (positive area) - exterior
+        let ccw_ring = make_square_ring(10.0); // Our helper makes CCW
+        let idx_ccw = manager.add_ring(ccw_ring);
+
+        // CW ring (negative area) - hole
+        // Reverse the points to make it CW
+        let mut cw_ring = Ring::empty();
+        cw_ring.push_point(Coord { x: 0.0, y: 0.0 });
+        cw_ring.push_point(Coord { x: 0.0, y: 10.0 });
+        cw_ring.push_point(Coord { x: 10.0, y: 10.0 });
+        cw_ring.push_point(Coord { x: 10.0, y: 0.0 });
+        let idx_cw = manager.add_ring(cw_ring);
+
+        // CCW should not be detected as hole
+        assert!(!manager.ring_is_hole(idx_ccw));
+
+        // CW should be detected as hole
+        assert!(manager.ring_is_hole(idx_cw));
     }
 }

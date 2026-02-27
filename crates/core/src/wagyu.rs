@@ -373,4 +373,111 @@ mod tests {
         assert_eq!(partial_max(1, 2), 2);
         assert_eq!(partial_max(2, 1), 2);
     }
+
+    /// Minimal reproduction test for the intersection winding_count2 = 0 bug.
+    ///
+    /// Two overlapping unit squares:
+    ///   Subject: (0,0) -> (2,2)  [CCW: (0,0),(2,0),(2,2),(0,2)]
+    ///   Clip:    (1,1) -> (3,3)  [CCW: (1,1),(3,1),(3,3),(1,3)]
+    ///
+    /// Expected intersection: the 1x1 square (1,1) -> (2,2)
+    ///   Result should have exactly 1 polygon with area = 1.
+    ///
+    /// Bug: all edges have winding_count2 = 0, so is_contributing = false,
+    /// and the result is an empty MultiPolygon instead of the 1x1 square.
+    #[test]
+    fn minimal_intersection_two_overlapping_squares() {
+        let mut clipper: Wagyu<i64> = Wagyu::new();
+
+        // Subject: 2x2 square (0,0) to (2,2), counter-clockwise
+        // CCW order: bottom-left -> bottom-right -> top-right -> top-left
+        let subject = vec![
+            Point::new(0i64, 0),
+            Point::new(2, 0),
+            Point::new(2, 2),
+            Point::new(0, 2),
+        ];
+
+        // Clip: 2x2 square (1,1) to (3,3), counter-clockwise
+        // CCW order: bottom-left -> bottom-right -> top-right -> top-left
+        let clip = vec![
+            Point::new(1i64, 1),
+            Point::new(3, 1),
+            Point::new(3, 3),
+            Point::new(1, 3),
+        ];
+
+        let subject_added = clipper.add_ring(&subject, PolygonType::Subject);
+        let clip_added = clipper.add_ring(&clip, PolygonType::Clip);
+
+        assert!(subject_added, "Subject ring must be added successfully");
+        assert!(clip_added, "Clip ring must be added successfully");
+
+        let result = clipper
+            .execute(
+                Operation::Intersection,
+                FillType::NonZero,
+                FillType::NonZero,
+            )
+            .expect("execute must not fail");
+
+        // The intersection of (0,0)-(2,2) and (1,1)-(3,3) is the unit square (1,1)-(2,2)
+        assert_eq!(
+            result.0.len(),
+            1,
+            "Intersection of two overlapping squares must produce exactly 1 polygon, got {}. \
+            Bug: winding_count2 = 0 on all edges prevents contribution.",
+            result.0.len()
+        );
+
+        // Verify the output polygon has 4 vertices (the 1x1 overlap square)
+        let poly = &result.0[0];
+        let exterior = poly.exterior();
+        // A closed ring has the first point repeated, so 4 distinct points = 5 coords
+        assert_eq!(
+            exterior.0.len(),
+            5,
+            "Intersection polygon should have 4 vertices (closed ring = 5 coords), got {}",
+            exterior.0.len()
+        );
+    }
+
+    /// Additional diagnostic: verify union works while intersection fails.
+    ///
+    /// If union produces 1 polygon (the L-shape covering both squares)
+    /// but intersection produces 0 polygons, that confirms winding_count2
+    /// is the culprit: union checks `winding_count2 == 0` (outside other poly)
+    /// while intersection checks `winding_count2 != 0` (inside other poly).
+    #[test]
+    fn minimal_union_two_overlapping_squares_for_comparison() {
+        let mut clipper: Wagyu<i64> = Wagyu::new();
+
+        let subject = vec![
+            Point::new(0i64, 0),
+            Point::new(2, 0),
+            Point::new(2, 2),
+            Point::new(0, 2),
+        ];
+        let clip = vec![
+            Point::new(1i64, 1),
+            Point::new(3, 1),
+            Point::new(3, 3),
+            Point::new(1, 3),
+        ];
+
+        clipper.add_ring(&subject, PolygonType::Subject);
+        clipper.add_ring(&clip, PolygonType::Clip);
+
+        let result = clipper
+            .execute(Operation::Union, FillType::NonZero, FillType::NonZero)
+            .expect("execute must not fail");
+
+        // Union of two overlapping squares = one L-shaped polygon
+        assert_eq!(
+            result.0.len(),
+            1,
+            "Union of two overlapping squares must produce exactly 1 polygon, got {}",
+            result.0.len()
+        );
+    }
 }

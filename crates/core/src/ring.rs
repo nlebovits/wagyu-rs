@@ -52,7 +52,7 @@ impl<T: CoordNum> Ring<T> {
         }
     }
 
-    /// Add a point to the ring.
+    /// Add a point to the end of the ring (back).
     pub fn push_point(&mut self, point: Coord<T>) {
         self.points.push(point);
     }
@@ -60,6 +60,19 @@ impl<T: CoordNum> Ring<T> {
     /// Add a point to the ring (alias for push_point for compatibility).
     pub fn add_point(&mut self, point: Coord<T>) {
         self.points.push(point);
+    }
+
+    /// Insert a point at the front of the ring.
+    ///
+    /// PORT FROM: wagyu C++ uses a circular linked list where Left side points
+    /// are inserted at the front. We replicate this with Vec::insert(0, ...).
+    pub fn insert_at_front(&mut self, point: Coord<T>) {
+        self.points.insert(0, point);
+    }
+
+    /// Returns the first point in the ring, if any.
+    pub fn first(&self) -> Option<&Coord<T>> {
+        self.points.first()
     }
 
     /// Returns the number of points in the ring.
@@ -115,6 +128,20 @@ impl<T: CoordNum> Ring<T> {
     /// Clear all children (used during tree rebuilding).
     pub fn clear_children(&mut self) {
         self.children.clear();
+    }
+
+    /// Remove a specific child by index.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring.hpp - remove_from_children
+    ///
+    /// Returns true if the child was found and removed.
+    pub fn remove_child(&mut self, child_index: usize) -> bool {
+        if let Some(pos) = self.children.iter().position(|&c| c == child_index) {
+            self.children.remove(pos);
+            true
+        } else {
+            false
+        }
     }
 
     /// Returns a reference to the ring's points.
