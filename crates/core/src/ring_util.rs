@@ -576,7 +576,6 @@ pub fn add_first_point<T: CoordNum + Copy>(
     }
 
     if std::env::var("WAGYU_DEBUG").is_ok() {
-        use num_traits::ToPrimitive;
         eprintln!(
             "DEBUG: add_first_point created ring {} with point ({}, {}) parent={:?}",
             ring_idx,
@@ -623,7 +622,6 @@ pub fn add_point_to_ring<T: CoordNum + Copy>(
     let to_front = side == EdgeSide::Left;
 
     if std::env::var("WAGYU_DEBUG").is_ok() {
-        use num_traits::ToPrimitive;
         eprintln!(
             "DEBUG: add_point_to_ring bound {} side={:?} to_front={} ring {} pt=({}, {})",
             bound_idx,
@@ -654,7 +652,6 @@ pub fn add_point_to_ring<T: CoordNum + Copy>(
         }
 
         if std::env::var("WAGYU_DEBUG").is_ok() && ring_idx == 1 {
-            use num_traits::ToPrimitive;
             eprintln!(
                 "DEBUG: Ring 1 state after add: {:?}",
                 ring.points()

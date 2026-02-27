@@ -644,15 +644,13 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
 
         // If no parent found and this ring is calculated as a hole, that's an error
         // PORT FROM: C++ correct_tree lines 1294-1300
-        if !found_parent {
-            if ring_is_hole {
-                // C++ throws: "Could not properly place hole to a parent."
-                // For now, we just make it a top-level exterior
-                if let Some(ring) = manager.get_mut(ring_idx) {
-                    ring.set_hole(false);
-                }
+        // If it's not a hole, it's already a top-level exterior - no action needed
+        if !found_parent && ring_is_hole {
+            // C++ throws: "Could not properly place hole to a parent."
+            // For now, we just make it a top-level exterior
+            if let Some(ring) = manager.get_mut(ring_idx) {
+                ring.set_hole(false);
             }
-            // If it's not a hole, it's already a top-level exterior - no action needed
         }
     }
 
