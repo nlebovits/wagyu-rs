@@ -45,6 +45,7 @@ pub mod topology_correction;
 pub mod util;
 pub mod vatti;
 pub mod wagyu;
+pub mod winding;
 
 pub use active_edge_list::ActiveEdgeList;
 pub use bound::{Bound, Edge};
@@ -77,6 +78,9 @@ pub use config::{FillType, PolygonType};
 pub use error::WagyuError;
 pub use vatti::execute_vatti;
 pub use wagyu::{BoundingBox, Coord, MultiPolygon, Polygon, Wagyu};
+pub use winding::{
+    is_contributing, is_even_odd_alt_fill_type, is_even_odd_fill_type, set_winding_count,
+};
 
 /// Boolean operation types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
