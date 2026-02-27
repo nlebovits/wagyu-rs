@@ -569,6 +569,20 @@ pub fn add_first_point<T: CoordNum + Copy>(
     // Set parent if found
     if let Some(parent_idx) = parent_ring {
         rings.set_parent(ring_idx, parent_idx);
+        // If this ring has a parent, it's a hole
+        if let Some(ring) = rings.get_mut(ring_idx) {
+            ring.set_hole(true);
+        }
+    }
+
+    if std::env::var("WAGYU_DEBUG").is_ok() {
+        eprintln!(
+            "DEBUG: add_first_point created ring {} with point ({}, {}) parent={:?}",
+            ring_idx,
+            pt.x.to_f64().unwrap_or(0.0),
+            pt.y.to_f64().unwrap_or(0.0),
+            parent_ring
+        );
     }
 
     ring_idx
@@ -599,19 +613,56 @@ pub fn add_point_to_ring<T: CoordNum + Copy>(
         None => return,
     };
 
-    // DIVERGENCE FROM WAGYU: C++ checks for duplicate points at front/back based on side
-    // In our Vec-based approach, we just append. Duplicates can be removed later.
-    // The side (Left/Right) determines where in the linked list C++ inserts,
-    // but for us it doesn't matter since we'll process the full ring at the end.
+    // PORT FROM: wagyu C++ add_point_to_ring (ring_util.hpp:319-337)
+    // C++ uses a circular linked list where:
+    //   - Left side points are inserted at the FRONT (bnd.ring->points = new_point)
+    //   - Right side points are inserted at the BACK (before head = after tail)
+    // We replicate this with Vec operations.
+    let side = bounds[bound_idx].side;
+    let to_front = side == EdgeSide::Left;
+
+    if std::env::var("WAGYU_DEBUG").is_ok() {
+        eprintln!(
+            "DEBUG: add_point_to_ring bound {} side={:?} to_front={} ring {} pt=({}, {})",
+            bound_idx,
+            side,
+            to_front,
+            ring_idx,
+            pt.x.to_f64().unwrap_or(0.0),
+            pt.y.to_f64().unwrap_or(0.0)
+        );
+    }
 
     if let Some(ring) = rings.get_mut(ring_idx) {
-        // Avoid adding duplicate consecutive points
-        if let Some(last) = ring.points().last() {
-            if *last == pt {
-                return;
+        // Check for duplicate at the insertion position
+        if to_front {
+            if let Some(first) = ring.first() {
+                if *first == pt {
+                    return;
+                }
             }
+            ring.insert_at_front(pt);
+        } else {
+            if let Some(last) = ring.points().last() {
+                if *last == pt {
+                    return;
+                }
+            }
+            ring.push_point(pt);
         }
-        ring.push_point(pt);
+
+        if std::env::var("WAGYU_DEBUG").is_ok() && ring_idx == 1 {
+            eprintln!(
+                "DEBUG: Ring 1 state after add: {:?}",
+                ring.points()
+                    .iter()
+                    .map(|c| (
+                        c.x.to_f64().unwrap_or(0.0) as i64,
+                        c.y.to_f64().unwrap_or(0.0) as i64
+                    ))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 }
 
@@ -720,6 +771,80 @@ fn ring1_child_below_ring2<T: CoordNum>(
     }
 }
 
+/// Determine which of two rings is the "lower most" based on their bottom points.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - get_lower_most_ring (lines 454-480)
+///
+/// This is used to determine which ring to keep when merging two rings.
+/// The ring with the lower (larger y) bottom point is preferred.
+/// If y values are equal, the ring with the smaller x is preferred.
+///
+/// # Arguments
+/// * `ring1_idx` - Index of the first ring
+/// * `ring2_idx` - Index of the second ring
+/// * `rings` - The ring manager
+///
+/// # Returns
+/// Index of the "lower most" ring, or ring1_idx if they're equal
+fn get_lower_most_ring<T: CoordNum>(
+    ring1_idx: usize,
+    ring2_idx: usize,
+    rings: &RingManager<T>,
+) -> usize {
+    // Get bottom points for both rings
+    let ring1_points = match rings.get(ring1_idx) {
+        Some(r) => r.points(),
+        None => return ring2_idx,
+    };
+    let ring2_points = match rings.get(ring2_idx) {
+        Some(r) => r.points(),
+        None => return ring1_idx,
+    };
+
+    let bp1_idx = match get_bottom_point_index(ring1_points) {
+        Some(idx) => idx,
+        None => return ring2_idx,
+    };
+    let bp2_idx = match get_bottom_point_index(ring2_points) {
+        Some(idx) => idx,
+        None => return ring1_idx,
+    };
+
+    let pt1 = ring1_points[bp1_idx];
+    let pt2 = ring2_points[bp2_idx];
+
+    let y1 = pt1.y.to_f64().unwrap_or(0.0);
+    let y2 = pt2.y.to_f64().unwrap_or(0.0);
+    let x1 = pt1.x.to_f64().unwrap_or(0.0);
+    let x2 = pt2.x.to_f64().unwrap_or(0.0);
+
+    // Larger y = lower in coordinate system
+    if y1 > y2 {
+        return ring1_idx;
+    } else if y1 < y2 {
+        return ring2_idx;
+    }
+
+    // Same y: prefer smaller x
+    if x1 < x2 {
+        return ring1_idx;
+    } else if x1 > x2 {
+        return ring2_idx;
+    }
+
+    // Same point: fallback to first_is_bottom_point logic
+    // For simplicity, we use area comparison as the C++ does for the final fallback
+    let area1 = ring_area(ring1_points);
+    let area2 = ring_area(ring2_points);
+
+    // Larger absolute area = more significant ring
+    if area1.abs() > area2.abs() {
+        ring1_idx
+    } else {
+        ring2_idx
+    }
+}
+
 /// Merge two rings when bounds meet at a local maximum.
 ///
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - append_ring (lines 504-606)
@@ -765,21 +890,18 @@ pub fn append_ring<T: CoordNum + Copy>(
         return;
     }
 
-    // Determine which ring to keep based on hierarchy and position
+    // Determine which ring to keep based on hierarchy and bottom point position
+    // PORT FROM: C++ append_ring logic (lines 510-530)
     let (keep_ring_idx, keep_bound_idx, remove_ring_idx, remove_bound_idx) =
         if ring1_child_below_ring2(ring1_idx, ring2_idx, rings) {
             (ring2_idx, b2_idx, ring1_idx, b1_idx)
         } else if ring1_child_below_ring2(ring2_idx, ring1_idx, rings) {
             (ring1_idx, b1_idx, ring2_idx, b2_idx)
+        } else if ring1_idx == get_lower_most_ring(ring1_idx, ring2_idx, rings) {
+            // Use get_lower_most_ring to determine which ring to keep
+            (ring1_idx, b1_idx, ring2_idx, b2_idx)
         } else {
-            // Use ring indices to determine order (lower index = created first = keep)
-            // C++ uses get_lower_most_ring based on bottom point, but for simplicity
-            // we use index ordering
-            if ring1_idx < ring2_idx {
-                (ring1_idx, b1_idx, ring2_idx, b2_idx)
-            } else {
-                (ring2_idx, b2_idx, ring1_idx, b1_idx)
-            }
+            (ring2_idx, b2_idx, ring1_idx, b1_idx)
         };
 
     // Get the points from the ring to remove
@@ -793,72 +915,54 @@ pub fn append_ring<T: CoordNum + Copy>(
     let remove_side = bounds[remove_bound_idx].side;
 
     // Merge points based on sides
-    // DIVERGENCE FROM WAGYU: Simplified merging logic
-    // C++ does complex linked-list reversal based on side combinations
-    // We append with potential reversal based on sides
+    // PORT FROM: C++ append_ring point merging (lines 544-579)
+    // The side combination determines how points are concatenated
     if let Some(keep_ring) = rings.get_mut(keep_ring_idx) {
         let keep_points = keep_ring.points_mut();
 
         match (keep_side, remove_side) {
             (EdgeSide::Left, EdgeSide::Left) => {
-                // C++: reverse remove, prepend to keep
+                // C++: z y x a b c - reverse remove, prepend to keep
                 let mut reversed: Vec<_> = remove_points.into_iter().rev().collect();
                 reversed.append(keep_points);
                 *keep_points = reversed;
             }
             (EdgeSide::Left, EdgeSide::Right) => {
-                // C++: prepend remove to keep
+                // C++: x y z a b c - prepend remove to keep
                 let mut new_points = remove_points;
                 new_points.append(keep_points);
                 *keep_points = new_points;
             }
             (EdgeSide::Right, EdgeSide::Right) => {
-                // C++: reverse remove, append to keep
+                // C++: a b c z y x - reverse remove, append to keep
                 let reversed: Vec<_> = remove_points.into_iter().rev().collect();
                 keep_points.extend(reversed);
             }
             (EdgeSide::Right, EdgeSide::Left) => {
-                // C++: append remove to keep
+                // C++: a b c x y z - append remove to keep
                 keep_points.extend(remove_points);
             }
         }
     }
 
-    // Transfer children from removed ring to kept ring
-    // and update parent relationships
-    if let Some(remove_ring) = rings.get(remove_ring_idx) {
-        let children: Vec<usize> = remove_ring.children().to_vec();
-        let remove_parent = remove_ring.parent();
+    // Determine if rings are holes based on their area
+    // PORT FROM: C++ append_ring (lines 581-587)
+    let keep_is_hole = rings.ring_is_hole(keep_ring_idx);
+    let remove_is_hole = rings.ring_is_hole(remove_ring_idx);
 
-        // Update children's parent to point to kept ring
-        for &child_idx in &children {
-            if let Some(child) = rings.get_mut(child_idx) {
-                child.set_parent(Some(keep_ring_idx));
-            }
-        }
+    // Get the kept ring's parent for hole replacement logic
+    let keep_parent = rings.get(keep_ring_idx).and_then(|r| r.parent());
 
-        // Add children to kept ring
-        if let Some(keep_ring) = rings.get_mut(keep_ring_idx) {
-            for &child_idx in &children {
-                keep_ring.add_child(child_idx);
-            }
-        }
-
-        // Remove from old parent's children if applicable
-        if let Some(parent_idx) = remove_parent {
-            // Note: This is simplified - proper implementation would remove
-            // the child from parent's children list
-            let _ = parent_idx; // Acknowledge but don't act for now
-        }
-    }
-
-    // Clear the removed ring's points
-    if let Some(remove_ring) = rings.get_mut(remove_ring_idx) {
-        remove_ring.points_mut().clear();
-        remove_ring.clear_children();
+    // Use ring1_replaces_ring2 with proper hole handling
+    // If the rings have different hole status, target the parent
+    if keep_is_hole != remove_is_hole {
+        rings.ring1_replaces_ring2(keep_parent, remove_ring_idx);
+    } else {
+        rings.ring1_replaces_ring2(Some(keep_ring_idx), remove_ring_idx);
     }
 
     // Clear ring references on both bounds
+    // PORT FROM: C++ append_ring (lines 596-597)
     bounds[keep_bound_idx].ring = None;
     bounds[remove_bound_idx].ring = None;
 

@@ -124,6 +124,25 @@ pub fn execute_vatti<T>(
     // Main sweep loop
     // From C++: while (pop_from_scanbeam(scanline_y, scanbeam) || current_lm != minima_sorted.end())
     let debug = std::env::var("WAGYU_DEBUG").is_ok();
+    if debug {
+        eprintln!(
+            "DEBUG: execute_vatti start - {} local minima",
+            minima_list.len()
+        );
+        for (i, lm) in minima_list.iter().enumerate() {
+            eprintln!(
+                "DEBUG:   LM[{}]: y={:?} poly_type={:?}",
+                i,
+                lm.y.to_f64(),
+                lm.left_bound.poly_type
+            );
+        }
+        eprintln!(
+            "DEBUG: scanbeam has {} entries: {:?}",
+            scanbeam.len(),
+            scanbeam.values_for_debug()
+        );
+    }
     while pop_from_scanbeam(&mut scanline_y, &mut scanbeam) || current_lm_idx < minima_list.len() {
         if debug {
             eprintln!(

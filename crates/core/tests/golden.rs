@@ -76,15 +76,50 @@ fn load_expected(path: &Path) -> MultiPolygon<i64> {
     MultiPolygon::new(polygons)
 }
 
+/// Normalize a ring by:
+/// 1. Ensuring it's closed (first point == last point)
+/// 2. Removing duplicate closing point for comparison
+/// 3. Rotating to start at the lexicographically smallest coordinate
+fn normalize_ring(mut coords: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+    if coords.is_empty() {
+        return coords;
+    }
+
+    // Remove closing point if present (we'll compare without it)
+    if coords.len() > 1 && coords.first() == coords.last() {
+        coords.pop();
+    }
+
+    if coords.is_empty() {
+        return coords;
+    }
+
+    // Find the index of the minimum coordinate
+    let min_idx = coords
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, c)| *c)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    // Rotate to start at minimum
+    coords.rotate_left(min_idx);
+    coords
+}
+
 /// Convert wagyu MultiPolygon<i64> to sorted representation for comparison.
 /// Sorts polygons and rings to handle different orderings.
+/// Normalizes ring starting points for consistent comparison.
 fn normalize_result(mp: &MultiPolygon<i64>) -> Vec<Vec<Vec<(i64, i64)>>> {
     let mut result: Vec<Vec<Vec<(i64, i64)>>> =
         mp.0.iter()
             .map(|poly| {
                 let mut rings: Vec<Vec<(i64, i64)>> = std::iter::once(poly.exterior())
                     .chain(poly.interiors().iter())
-                    .map(|ring| ring.coords().map(|c| (c.x, c.y)).collect::<Vec<_>>())
+                    .map(|ring| {
+                        let coords: Vec<_> = ring.coords().map(|c| (c.x, c.y)).collect();
+                        normalize_ring(coords)
+                    })
                     .collect();
                 // Sort rings within polygon for consistent comparison
                 rings.sort();
@@ -150,6 +185,13 @@ fn run_golden_test(test_name: &str, operation: Operation) {
             if coords.len() > 10 {
                 eprintln!("    ... and {} more", coords.len() - 10);
             }
+            for (k, interior) in poly.interiors().iter().enumerate() {
+                let coords: Vec<_> = interior.coords().collect();
+                eprintln!("  Hole {} coords ({}):", k, coords.len());
+                for (j, c) in coords.iter().take(10).enumerate() {
+                    eprintln!("    {}: ({}, {})", j, c.x, c.y);
+                }
+            }
         }
         eprintln!("\nGot ({} polygons):", result.0.len());
         for (i, poly) in result.0.iter().enumerate() {
@@ -162,7 +204,15 @@ fn run_golden_test(test_name: &str, operation: Operation) {
             if coords.len() > 10 {
                 eprintln!("    ... and {} more", coords.len() - 10);
             }
+            for (k, interior) in poly.interiors().iter().enumerate() {
+                let coords: Vec<_> = interior.coords().collect();
+                eprintln!("  Hole {} coords ({}):", k, coords.len());
+                for (j, c) in coords.iter().take(10).enumerate() {
+                    eprintln!("    {}: ({}, {})", j, c.x, c.y);
+                }
+            }
         }
+
         panic!("Golden test failed: {}-{}", op_name(operation), test_name);
     }
 }

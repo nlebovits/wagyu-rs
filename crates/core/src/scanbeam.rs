@@ -187,6 +187,13 @@ impl<T: CoordNum> Scanbeam<T> {
         self.values.len()
     }
 
+    /// Returns a reference to the internal values for debugging.
+    ///
+    /// Values are stored in ascending order, with pop() returning from the back.
+    pub fn values_for_debug(&self) -> &[T] {
+        &self.values
+    }
+
     /// Removes all elements from the scanbeam.
     ///
     /// # Example

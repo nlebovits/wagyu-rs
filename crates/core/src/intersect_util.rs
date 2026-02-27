@@ -388,12 +388,29 @@ pub fn update_winding_counts<T: CoordNum>(
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - add_point
 ///
 /// This adds the intersection point to the bound's ring if one exists.
+/// The bound's side determines where the point is inserted:
+/// - Left side: insert at front (prepend)
+/// - Right side: insert at back (append)
 fn add_point<T: CoordNum>(bound: &mut Bound<T>, pt: Point<T>, manager: &mut RingManager<T>) {
     if let Some(ring_idx) = bound.ring {
         // Check if this point differs from last_point
         if pt.x != bound.last_point.x || pt.y != bound.last_point.y {
+            let coord = geo_types::Coord { x: pt.x, y: pt.y };
+            let to_front = bound.side == EdgeSide::Left;
+
             if let Some(ring) = manager.get_mut(ring_idx) {
-                ring.add_point(geo_types::Coord { x: pt.x, y: pt.y });
+                // Check for duplicate at insertion position
+                if to_front {
+                    if ring.first() == Some(&coord) {
+                        return;
+                    }
+                    ring.insert_at_front(coord);
+                } else {
+                    if ring.points().last() == Some(&coord) {
+                        return;
+                    }
+                    ring.push_point(coord);
+                }
             }
             bound.last_point = pt;
         }
@@ -589,7 +606,7 @@ pub fn intersect_bounds<T: CoordNum>(
     b1: &mut Bound<T>,
     b2: &mut Bound<T>,
     pt: Point<T>,
-    _cliptype: Operation,
+    cliptype: Operation,
     subject_fill_type: FillType,
     clip_fill_type: FillType,
     manager: &mut RingManager<T>,
@@ -607,10 +624,20 @@ pub fn intersect_bounds<T: CoordNum>(
     let b2_contributing = b2.ring.is_some();
 
     // Handle intersection based on contribution status
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp lines 192-201
     if b1_contributing && b2_contributing {
-        if (b1_wc != 0 && b1_wc != 1) || (b2_wc != 0 && b2_wc != 1) {
+        // Check if we need to merge rings at this intersection:
+        // 1. Unusual winding counts (not 0 or 1), OR
+        // 2. Different polygon types (subject vs clip) and NOT doing XOR
+        //
+        // This is CRITICAL for difference operations where subject and clip
+        // bounds intersect - their rings must merge into one continuous boundary.
+        let unusual_winding = (b1_wc != 0 && b1_wc != 1) || (b2_wc != 0 && b2_wc != 1);
+        let different_poly_types_not_xor =
+            b1.poly_type != b2.poly_type && cliptype != Operation::Xor;
+
+        if unusual_winding || different_poly_types_not_xor {
             // Add local maximum point - rings meet and close/merge
-            // PORT FROM: C++ intersect_bounds case where both contribute but winding unusual
             return add_local_maximum_point_at_intersection(b1, b2, pt, manager);
         } else {
             // Add point to both rings before swapping

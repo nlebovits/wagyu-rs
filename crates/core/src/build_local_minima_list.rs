@@ -297,6 +297,8 @@ pub fn add_ring_to_local_minima_list<T: CoordNum>(
         };
 
         // Get the Y coordinate of the local minimum
+        // PORT FROM: wagyu C++ uses bot.y where bot has the larger Y value (screen coords)
+        // After fixing build_edges.rs to match C++ convention, bot.y is now the larger Y.
         let min_y = to_minimum[0].bot.y;
 
         // Debug output for edge counts
@@ -472,8 +474,9 @@ mod tests {
         ];
         add_linear_ring(&points, &mut minima_list, PolygonType::Subject);
         assert!(!minima_list.is_empty());
-        // The local minimum should be at y=5.0
-        assert_eq!(minima_list[0].y, 5.0);
+        // C++ convention: local minimum is at the highest Y (screen bottom)
+        // This triangle has points at y=5 and y=15, so local minimum is at y=15
+        assert_eq!(minima_list[0].y, 15.0);
     }
 
     #[test]
@@ -610,8 +613,9 @@ mod tests {
         let result = add_linear_ring(&points, &mut minima_list, PolygonType::Subject);
         assert!(result);
         assert!(!minima_list.is_empty());
-        // Minimum Y should be -10
-        assert_eq!(minima_list[0].y, -10);
+        // C++ convention: local minimum Y is the highest Y (screen bottom)
+        // This triangle has y=-10 and y=10, so local minimum is at y=10
+        assert_eq!(minima_list[0].y, 10);
     }
 
     // ==================== Start List on Local Maximum Tests ====================

@@ -525,8 +525,17 @@ fn correct_orientations<T: CoordNum + Copy>(manager: &mut crate::build_result::R
             continue;
         }
 
+        let needs_reversal = needs_orientation_reversal(area, is_hole);
+
+        if std::env::var("WAGYU_DEBUG").is_ok() {
+            eprintln!(
+                "DEBUG: correct_orientations ring {} area={:.2} is_hole={} needs_reversal={}",
+                idx, area, is_hole, needs_reversal
+            );
+        }
+
         // Check if orientation needs correction
-        if needs_orientation_reversal(area, is_hole) {
+        if needs_reversal {
             if let Some(ring) = manager.get_mut(idx) {
                 reverse_ring(ring.points_mut());
             }
@@ -557,13 +566,23 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
             }
             let area = ring_area(points);
             if let Some(bbox) = BBoxF64::from_ring(points) {
-                ring_data.push((idx, area, bbox, ring.is_hole()));
+                // Determine hole status from area sign, NOT from stored flag
+                // PORT FROM: C++ ring.hpp is_hole() - negative area = clockwise = hole
+                let is_hole = area < 0.0;
+                ring_data.push((idx, area, bbox, is_hole));
             }
         }
     }
 
     // Sort by absolute area, largest first
     ring_data.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap());
+
+    if std::env::var("WAGYU_DEBUG").is_ok() {
+        eprintln!("DEBUG: correct_tree - ring_data after sort:");
+        for (idx, area, _, is_hole) in &ring_data {
+            eprintln!("DEBUG:   ring {} area={:.2} is_hole={}", idx, area, is_hole);
+        }
+    }
 
     // Clear existing parent/child relationships
     for (idx, _, _, _) in &ring_data {
@@ -573,6 +592,8 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
 
     // Rebuild hierarchy
     // For each ring, search backwards for potential parents
+    //
+    // PORT FROM: C++ correct_tree (topology_correction.hpp lines 1262-1302)
     for i in 0..ring_data.len() {
         let (ring_idx, ring_area_val, ref ring_bbox, ring_is_hole) = ring_data[i];
 
@@ -583,10 +604,12 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
         };
 
         // Search backwards for potential parents (larger rings)
+        let mut found_parent = false;
         for j in (0..i).rev() {
             let (parent_idx, parent_area_val, ref parent_bbox, parent_is_hole) = ring_data[j];
 
-            // Parent must have opposite is_hole status
+            // PORT FROM: C++ correct_tree line ~1288
+            // If orientations are not different, this can't be its parent.
             // (exterior contains hole, hole contains island which becomes exterior)
             if parent_is_hole == ring_is_hole {
                 continue;
@@ -610,13 +633,23 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
                 // Set this ring as child of parent
                 manager.set_parent(ring_idx, parent_idx);
 
-                // Also update is_hole status based on nesting
-                // If parent is exterior (not hole), child becomes hole
-                // If parent is hole, child becomes exterior (island)
+                // Update is_hole status in the ring
                 if let Some(ring) = manager.get_mut(ring_idx) {
                     ring.set_hole(!parent_is_hole);
                 }
+                found_parent = true;
                 break;
+            }
+        }
+
+        // If no parent found and this ring is calculated as a hole, that's an error
+        // PORT FROM: C++ correct_tree lines 1294-1300
+        // If it's not a hole, it's already a top-level exterior - no action needed
+        if !found_parent && ring_is_hole {
+            // C++ throws: "Could not properly place hole to a parent."
+            // For now, we just make it a top-level exterior
+            if let Some(ring) = manager.get_mut(ring_idx) {
+                ring.set_hole(false);
             }
         }
     }

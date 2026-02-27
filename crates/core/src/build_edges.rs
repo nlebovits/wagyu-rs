@@ -284,25 +284,25 @@ pub fn build_edge_list<T: CoordNum + ToPrimitive + PartialOrd>(
 
 /// Helper function to add an edge to the edge list.
 ///
-/// Edges are oriented so that `bot` has the lower y-coordinate.
-/// For horizontal edges (same y), `bot` has the lower x-coordinate.
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/edge.hpp (edge constructor)
+///
+/// C++ uses screen coordinates where `bot` has the HIGHER y-coordinate
+/// (bottom of screen). We match this convention for algorithm compatibility.
+/// For horizontal edges (same y), the first point becomes `bot` (matching C++).
 fn add_edge<T: CoordNum + PartialOrd>(edges: &mut EdgeList<T>, p1: Point<T>, p2: Point<T>) {
     if p1 == p2 {
         return; // Skip degenerate edges
     }
 
-    // Determine which point is bot (lower y, or lower x if y is equal)
-    let (bot, top) = if p1.y < p2.y {
+    // C++ convention: bot.y >= top.y (bot is at bottom of screen = higher Y)
+    // From C++: if (current.y >= next_pt.y) { top = next_pt; } else { bot = next_pt; }
+    // For horizontal edges (y1 == y2), the condition is true, so p1 becomes bot.
+    let (bot, top) = if p1.y >= p2.y {
+        // p1 has higher or equal Y, so p1 is bot
         (p1, p2)
-    } else if p1.y > p2.y {
-        (p2, p1)
     } else {
-        // Horizontal edge - use x to determine order
-        if p1.x < p2.x {
-            (p1, p2)
-        } else {
-            (p2, p1)
-        }
+        // p2 has higher Y, so p2 is bot
+        (p2, p1)
     };
 
     edges.push(Edge::new(bot, top));
@@ -617,11 +617,11 @@ mod tests {
 
         let edges = build_edge_list(&ring).unwrap();
 
-        // All edges should have bot.y <= top.y
+        // C++ convention: bot.y >= top.y (bot is at bottom of screen = higher Y)
         for edge in &edges {
             assert!(
-                edge.bot.y <= edge.top.y,
-                "Edge bot.y ({}) should be <= top.y ({})",
+                edge.bot.y >= edge.top.y,
+                "Edge bot.y ({}) should be >= top.y ({}) per C++ convention",
                 edge.bot.y,
                 edge.top.y
             );
@@ -641,18 +641,13 @@ mod tests {
 
         let edges = build_edge_list(&ring).unwrap();
 
-        // Find horizontal edges and verify bot.x <= top.x
-        for edge in &edges {
-            if edge.bot.y == edge.top.y {
-                // Horizontal edge
-                assert!(
-                    edge.bot.x <= edge.top.x,
-                    "Horizontal edge bot.x ({}) should be <= top.x ({})",
-                    edge.bot.x,
-                    edge.top.x
-                );
-            }
-        }
+        // C++ convention: for horizontal edges (bot.y == top.y), the first point
+        // in the original pair becomes bot. We just verify they're horizontal.
+        let horizontal_count = edges.iter().filter(|e| e.bot.y == e.top.y).count();
+        assert!(
+            horizontal_count >= 2,
+            "Square should have at least 2 horizontal edges"
+        );
     }
 
     #[test]
