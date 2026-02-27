@@ -137,6 +137,8 @@ pub fn at_edge_top<T: CoordNum + PartialEq>(bound: &Bound<T>, y: T) -> bool {
 use crate::build_result::RingManager;
 use crate::config::FillType;
 use crate::local_minimum::LocalMinimumList;
+use crate::ring_util;
+use crate::winding;
 use crate::Operation;
 use num_traits::ToPrimitive;
 
@@ -153,11 +155,11 @@ use num_traits::ToPrimitive;
 /// * `current_lm_idx` - Current index into minima_sorted (will be incremented)
 /// * `bounds` - Storage for all bounds
 /// * `ael` - Active edge list
-/// * `_manager` - Ring manager (used for contributing edges - simplified in this port)
+/// * `manager` - Ring manager (used for contributing edges)
 /// * `scanbeam` - Scanbeam for adding edge top Y coordinates
-/// * `_cliptype` - Boolean operation type
-/// * `_subject_fill_type` - Fill rule for subject polygons
-/// * `_clip_fill_type` - Fill rule for clip polygons
+/// * `cliptype` - Boolean operation type
+/// * `subject_fill_type` - Fill rule for subject polygons
+/// * `clip_fill_type` - Fill rule for clip polygons
 #[allow(clippy::too_many_arguments)]
 pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
     bot_y: T,
@@ -165,11 +167,11 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
     current_lm_idx: &mut usize,
     bounds: &mut Vec<Bound<T>>,
     ael: &mut ActiveEdgeList,
-    _manager: &mut RingManager<T>,
+    manager: &mut RingManager<T>,
     scanbeam: &mut Scanbeam<T>,
-    _cliptype: Operation,
-    _subject_fill_type: FillType,
-    _clip_fill_type: FillType,
+    cliptype: Operation,
+    subject_fill_type: FillType,
+    clip_fill_type: FillType,
 ) {
     let bot_y_f64 = bot_y.to_f64().unwrap_or(0.0);
 
@@ -212,12 +214,57 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
         // From C++: insert_lm_left_and_right_bound(left_bound, right_bound, active_bounds, ...)
         ael.insert_pair(left_idx, right_idx, bounds);
 
+        // Find position of left bound in AEL for winding count calculation
+        let left_pos = ael.position(left_idx).unwrap_or(0);
+
+        // PORT FROM: C++ insert_lm_left_and_right_bound (lines 340-345)
+        // Set winding count for the left bound based on bounds to its left
+        winding::set_winding_count(left_pos, ael.as_slice(), bounds, subject_fill_type, clip_fill_type);
+
+        // Copy winding counts to right bound (they share the same local minimum)
+        // From C++: (*rb_abl_itr)->winding_count = (*lb_abl_itr)->winding_count;
+        let (left_wc, left_wc2) = {
+            let left = &bounds[left_idx];
+            (left.winding_count, left.winding_count2)
+        };
+        bounds[right_idx].winding_count = left_wc;
+        bounds[right_idx].winding_count2 = left_wc2;
+
+        // Check if this local minimum contributes to output
+        // From C++: if (is_contributing(left_bound, cliptype, subject_fill_type, clip_fill_type))
+        if winding::is_contributing(
+            &bounds[left_idx],
+            cliptype,
+            subject_fill_type,
+            clip_fill_type,
+        ) {
+            // Create ring at this local minimum point
+            // From C++: add_local_minimum_point(lb, rb, active_bounds, lb.current_edge->bot, rings)
+            let pt = {
+                let bot = bounds[left_idx].current_edge().bot;
+                geo_types::Coord { x: bot.x, y: bot.y }
+            };
+            ring_util::add_local_minimum_point(
+                left_idx,
+                right_idx,
+                bounds,
+                ael.as_slice(),
+                pt,
+                manager,
+            );
+        }
+
         // Add edge tops to scanbeam
         // From C++: insert_sorted_scanbeam(scanbeam, (*lb_abl_itr)->current_edge->top.y)
         let left_top = bounds[left_idx].current_edge().top.y;
         let right_top = bounds[right_idx].current_edge().top.y;
         scanbeam.insert(left_top);
-        scanbeam.insert(right_top);
+
+        // From C++: Only add right edge top if not horizontal
+        // if (!current_edge_is_horizontal<T>(rb_abl_itr))
+        if !bounds[right_idx].current_edge().is_horizontal() {
+            scanbeam.insert(right_top);
+        }
 
         // Move to next local minimum
         *current_lm_idx += 1;

@@ -527,7 +527,7 @@ pub fn add_first_point<T: CoordNum + Copy>(
     rings: &mut RingManager<T>,
 ) -> usize {
     // Create a new ring
-    let mut new_ring = Ring::new();
+    let mut new_ring = Ring::empty();
     new_ring.push_point(pt);
 
     // Add ring to manager and get its index

@@ -132,6 +132,7 @@ pub fn execute_vatti<T>(
             clip_type,
             subject_fill_type,
             clip_fill_type,
+            manager,
         );
 
         // From C++: update_current_hp_itr(scanline_y, manager);

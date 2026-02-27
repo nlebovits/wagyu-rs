@@ -31,7 +31,18 @@ pub struct Ring<T: CoordNum> {
 
 impl<T: CoordNum> Ring<T> {
     /// Create a new empty ring.
-    pub fn new() -> Self {
+    pub fn new(points: Vec<Coord<T>>) -> Self {
+        Ring {
+            points,
+            is_hole: false,
+            ring_index: 0,
+            parent: None,
+            children: Vec::new(),
+        }
+    }
+
+    /// Create a new empty ring.
+    pub fn empty() -> Self {
         Ring {
             points: Vec::new(),
             is_hole: false,
@@ -43,6 +54,11 @@ impl<T: CoordNum> Ring<T> {
 
     /// Add a point to the ring.
     pub fn push_point(&mut self, point: Coord<T>) {
+        self.points.push(point);
+    }
+
+    /// Add a point to the ring (alias for push_point for compatibility).
+    pub fn add_point(&mut self, point: Coord<T>) {
         self.points.push(point);
     }
 
@@ -142,7 +158,7 @@ impl<T: CoordFloat> Ring<T> {
 
 impl<T: CoordNum> Default for Ring<T> {
     fn default() -> Self {
-        Self::new()
+        Self::empty()
     }
 }
 
@@ -155,7 +171,7 @@ mod tests {
 
     #[test]
     fn new_ring_is_empty() {
-        let ring: Ring<f64> = Ring::new();
+        let ring: Ring<f64> = Ring::empty();
         assert!(ring.is_empty());
         assert_eq!(ring.len(), 0);
     }
@@ -164,7 +180,7 @@ mod tests {
 
     #[test]
     fn push_point_increases_len() {
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.push_point(Coord { x: 0.0, y: 0.0 });
         assert_eq!(ring.len(), 1);
         assert!(!ring.is_empty());
@@ -178,13 +194,13 @@ mod tests {
 
     #[test]
     fn new_ring_is_not_a_hole_by_default() {
-        let ring: Ring<f64> = Ring::new();
+        let ring: Ring<f64> = Ring::empty();
         assert!(!ring.is_hole());
     }
 
     #[test]
     fn set_hole_marks_ring_as_hole() {
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.set_hole(true);
         assert!(ring.is_hole());
 
@@ -199,7 +215,7 @@ mod tests {
 
     #[test]
     fn area_of_empty_ring_is_zero() {
-        let ring: Ring<f64> = Ring::new();
+        let ring: Ring<f64> = Ring::empty();
         assert!((ring.area() - 0.0).abs() < 1e-10);
     }
 
@@ -207,7 +223,7 @@ mod tests {
     fn area_of_ccw_unit_square_is_positive() {
         // Unit square in CCW order: (0,0) -> (1,0) -> (1,1) -> (0,1)
         // Expected area: +1.0 (positive indicates CCW)
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.push_point(Coord { x: 0.0, y: 0.0 });
         ring.push_point(Coord { x: 1.0, y: 0.0 });
         ring.push_point(Coord { x: 1.0, y: 1.0 });
@@ -222,7 +238,7 @@ mod tests {
     fn area_of_cw_unit_square_is_negative() {
         // Unit square in CW order: (0,0) -> (0,1) -> (1,1) -> (1,0)
         // Expected area: -1.0 (negative indicates CW)
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.push_point(Coord { x: 0.0, y: 0.0 });
         ring.push_point(Coord { x: 0.0, y: 1.0 });
         ring.push_point(Coord { x: 1.0, y: 1.0 });
@@ -240,7 +256,7 @@ mod tests {
     fn area_of_triangle() {
         // Triangle with vertices at (0,0), (4,0), (0,3) in CCW order
         // Expected area: 0.5 * base * height = 0.5 * 4 * 3 = 6.0
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.push_point(Coord { x: 0.0, y: 0.0 });
         ring.push_point(Coord { x: 4.0, y: 0.0 });
         ring.push_point(Coord { x: 0.0, y: 3.0 });
@@ -257,13 +273,13 @@ mod tests {
 
     #[test]
     fn new_ring_has_zero_index_by_default() {
-        let ring: Ring<f64> = Ring::new();
+        let ring: Ring<f64> = Ring::empty();
         assert_eq!(ring.ring_index(), 0);
     }
 
     #[test]
     fn set_ring_index_changes_index() {
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.set_ring_index(42);
         assert_eq!(ring.ring_index(), 42);
     }
@@ -272,13 +288,13 @@ mod tests {
 
     #[test]
     fn new_ring_has_no_parent() {
-        let ring: Ring<f64> = Ring::new();
+        let ring: Ring<f64> = Ring::empty();
         assert!(ring.parent().is_none());
     }
 
     #[test]
     fn set_parent_assigns_parent_index() {
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.set_parent(Some(5));
         assert_eq!(ring.parent(), Some(5));
 
@@ -288,13 +304,13 @@ mod tests {
 
     #[test]
     fn new_ring_has_no_children() {
-        let ring: Ring<f64> = Ring::new();
+        let ring: Ring<f64> = Ring::empty();
         assert!(ring.children().is_empty());
     }
 
     #[test]
     fn add_child_adds_child_index() {
-        let mut ring: Ring<f64> = Ring::new();
+        let mut ring: Ring<f64> = Ring::empty();
         ring.add_child(1);
         ring.add_child(3);
         ring.add_child(5);

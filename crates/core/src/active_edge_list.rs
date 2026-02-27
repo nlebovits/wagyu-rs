@@ -44,6 +44,11 @@ impl ActiveEdgeList {
         self.indices.iter()
     }
 
+    /// Returns the bound indices as a slice.
+    pub fn as_slice(&self) -> &[usize] {
+        &self.indices
+    }
+
     /// Insert a bound index, maintaining sort order by current_x.
     ///
     /// The `bounds` slice is used to look up the current_x values for comparison.

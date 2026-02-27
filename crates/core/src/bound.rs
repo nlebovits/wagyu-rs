@@ -98,13 +98,23 @@ pub struct Bound<T: CoordNum> {
     /// Winding count for the other polygon type.
     pub winding_count2: i32,
 
-    /// Winding delta: 1 or -1 depending on winding direction, 0 for linestrings.
+    /// Winding delta (+1 or -1) based on edge direction.
     ///
-    /// From C++: `std::int8_t winding_delta; // 1 or -1 depending on winding direction - 0 for linestrings`
-    pub winding_delta: i8,
+    /// From C++: `std::int8_t winding_delta`
+    ///
+    /// This is +1 for edges going up (left bound) and -1 for edges going down (right bound).
+    /// Set to 0 for linestrings.
+    pub winding_delta: i32,
 
     /// Index to the output ring this bound is contributing to, if any.
     pub ring: Option<usize>,
+
+    /// The last point added to this bound's ring.
+    ///
+    /// From C++: `mapbox::geometry::point<T> last_point`
+    ///
+    /// Used to avoid adding duplicate points to rings.
+    pub last_point: Point<T>,
 }
 
 impl<T: CoordNum> Bound<T> {
@@ -120,6 +130,13 @@ impl<T: CoordNum> Bound<T> {
         assert!(!edges.is_empty(), "Bound must have at least one edge");
 
         let current_x = edges[0].bot.x.to_f64().unwrap_or(0.0);
+        let last_point = edges[0].bot;
+
+        // Winding delta: +1 for left bounds, -1 for right bounds
+        let winding_delta = match side {
+            EdgeSide::Left => 1,
+            EdgeSide::Right => -1,
+        };
 
         Self {
             edges,
@@ -129,8 +146,9 @@ impl<T: CoordNum> Bound<T> {
             side,
             winding_count: 0,
             winding_count2: 0,
-            winding_delta: 0,
+            winding_delta,
             ring: None,
+            last_point,
         }
     }
 
@@ -146,11 +164,12 @@ impl<T: CoordNum> Bound<T> {
         edges: Vec<Edge<T>>,
         poly_type: PolygonType,
         side: EdgeSide,
-        winding_delta: i8,
+        winding_delta: i32,
     ) -> Self {
         assert!(!edges.is_empty(), "Bound must have at least one edge");
 
         let current_x = edges[0].bot.x.to_f64().unwrap_or(0.0);
+        let last_point = edges[0].bot;
 
         Self {
             edges,
@@ -162,6 +181,7 @@ impl<T: CoordNum> Bound<T> {
             winding_count2: 0,
             winding_delta,
             ring: None,
+            last_point,
         }
     }
 
@@ -187,6 +207,7 @@ impl<T: CoordNum> Bound<T> {
             winding_count2: 0,
             winding_delta: 0,
             ring: None,
+            last_point: origin,
         }
     }
 

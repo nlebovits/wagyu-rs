@@ -77,7 +77,7 @@ pub fn set_winding_count<T: CoordNum>(
 
     // Check if this is the first bound (no predecessors)
     if bound_position == 0 {
-        bounds[bound_index].winding_count = i32::from(bnd_winding_delta);
+        bounds[bound_index].winding_count = bnd_winding_delta;
         bounds[bound_index].winding_count2 = 0;
         return;
     }
@@ -103,47 +103,47 @@ pub fn set_winding_count<T: CoordNum>(
     match same_type_prev_pos {
         None => {
             // No same-type predecessor
-            bounds[bound_index].winding_count = i32::from(bnd_winding_delta);
+            bounds[bound_index].winding_count = bnd_winding_delta;
             bounds[bound_index].winding_count2 = 0;
         }
         Some(prev_pos) => {
             let prev_idx = ael_indices[prev_pos];
             if is_even_odd {
                 // EvenOdd filling: winding_count = winding_delta, copy winding_count2
-                bounds[bound_index].winding_count = i32::from(bnd_winding_delta);
+                bounds[bound_index].winding_count = bnd_winding_delta;
                 bounds[bound_index].winding_count2 = bounds[prev_idx].winding_count2;
             } else {
                 // NonZero, Positive, or Negative filling
                 let prev_winding_count = bounds[prev_idx].winding_count;
                 let prev_winding_delta = bounds[prev_idx].winding_delta;
 
-                if prev_winding_count * i32::from(prev_winding_delta) < 0 {
+                if prev_winding_count * prev_winding_delta < 0 {
                     // Prev edge is "decreasing" WindCount toward zero
                     // So we're outside the previous polygon
                     if prev_winding_count.abs() > 1 {
                         // Outside prev poly but still inside another
-                        if i32::from(prev_winding_delta) * i32::from(bnd_winding_delta) < 0 {
+                        if prev_winding_delta * bnd_winding_delta < 0 {
                             // When reversing direction of prev poly, use same WC
                             bounds[bound_index].winding_count = prev_winding_count;
                         } else {
                             // Otherwise continue to "decrease" WC
                             bounds[bound_index].winding_count =
-                                prev_winding_count + i32::from(bnd_winding_delta);
+                                prev_winding_count + bnd_winding_delta;
                         }
                     } else {
                         // Now outside all polys of same polytype, set own WC
-                        bounds[bound_index].winding_count = i32::from(bnd_winding_delta);
+                        bounds[bound_index].winding_count = bnd_winding_delta;
                     }
                 } else {
                     // Prev edge is "increasing" WindCount away from zero
                     // So we're inside the previous polygon
-                    if i32::from(prev_winding_delta) * i32::from(bnd_winding_delta) < 0 {
+                    if prev_winding_delta * bnd_winding_delta < 0 {
                         // Wind direction is reversing, use same WC
                         bounds[bound_index].winding_count = prev_winding_count;
                     } else {
                         // Add to WC
                         bounds[bound_index].winding_count =
-                            prev_winding_count + i32::from(bnd_winding_delta);
+                            prev_winding_count + bnd_winding_delta;
                     }
                 }
                 bounds[bound_index].winding_count2 = bounds[prev_idx].winding_count2;
@@ -177,7 +177,7 @@ pub fn set_winding_count<T: CoordNum>(
         // NonZero, Positive, or Negative filling: accumulate winding_delta
         for &idx in ael_indices.iter().take(bound_position).skip(start_pos) {
             if bounds[idx].poly_type != bnd_poly_type {
-                bounds[bound_index].winding_count2 += i32::from(bounds[idx].winding_delta);
+                bounds[bound_index].winding_count2 += bounds[idx].winding_delta;
             }
         }
     }
@@ -284,16 +284,16 @@ mod tests {
 
     // ==================== Helper Functions ====================
 
-    fn make_bound_with_delta(poly_type: PolygonType, winding_delta: i8) -> Bound<f64> {
+    fn make_bound_with_delta(poly_type: PolygonType, winding_delta: i32) -> Bound<f64> {
         let edge = Edge::new(Point::new(0.0_f64, 0.0), Point::new(10.0_f64, 10.0));
         Bound::new_with_delta(vec![edge], poly_type, EdgeSide::Left, winding_delta)
     }
 
-    fn make_subject_bound(winding_delta: i8) -> Bound<f64> {
+    fn make_subject_bound(winding_delta: i32) -> Bound<f64> {
         make_bound_with_delta(PolygonType::Subject, winding_delta)
     }
 
-    fn make_clip_bound(winding_delta: i8) -> Bound<f64> {
+    fn make_clip_bound(winding_delta: i32) -> Bound<f64> {
         make_bound_with_delta(PolygonType::Clip, winding_delta)
     }
 

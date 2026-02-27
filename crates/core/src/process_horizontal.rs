@@ -23,6 +23,7 @@ use crate::config::{FillType, HorizontalDirection};
 use crate::intersect_util::get_current_x;
 use crate::local_minimum::LocalMinimumList;
 use crate::process_maxima::{do_maxima, get_maxima_pair, is_maxima};
+use crate::ring_util;
 use crate::scanbeam::Scanbeam;
 use crate::Operation;
 
@@ -381,7 +382,7 @@ pub fn update_all_current_x<T: CoordNum>(bounds: &mut [Bound<T>], ael: &ActiveEd
 /// * `minima_sorted` - Sorted indices into minima_list
 /// * `current_lm_idx` - Current position in minima_sorted
 /// * `minima_list` - List of local minima
-/// * `_manager` - Ring manager for output (unused in this stub)
+/// * `manager` - Ring manager for output
 /// * `clip_type` - Type of boolean operation
 /// * `subject_fill_type` - Fill rule for subject polygons
 /// * `clip_fill_type` - Fill rule for clip polygons
@@ -394,7 +395,7 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
     _minima_sorted: &[usize],
     _current_lm_idx: &mut usize,
     _minima_list: &LocalMinimumList<T>,
-    _manager: &mut RingManager<T>,
+    manager: &mut RingManager<T>,
     clip_type: Operation,
     subject_fill_type: FillType,
     clip_fill_type: FillType,
@@ -425,6 +426,41 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
         if is_maxima(bound, scanline_y) {
             // Find the maxima pair (note: argument order is bound_pos, bounds, ael)
             if let Some(pair_pos) = get_maxima_pair(i, bounds, ael) {
+                // Get the pair's bound index for ring operations
+                let pair_idx = ael.get(pair_pos);
+
+                // Check if both bounds have rings before calling add_local_maximum_point
+                // From C++: if ((*horz_bound)->ring && (*bound_max_pair)->ring)
+                let both_have_rings = {
+                    let b1_has_ring = bounds
+                        .get(bound_idx)
+                        .map(|b| b.ring.is_some())
+                        .unwrap_or(false);
+                    let b2_has_ring = pair_idx
+                        .and_then(|idx| bounds.get(idx))
+                        .map(|b| b.ring.is_some())
+                        .unwrap_or(false);
+                    b1_has_ring && b2_has_ring
+                };
+
+                if both_have_rings {
+                    if let Some(pair_bound_idx) = pair_idx {
+                        // Get the maximum point (top of current edge)
+                        let max_pt = bounds[bound_idx].current_edge().top;
+
+                        // Add local maximum point to close/merge rings
+                        // PORT FROM: C++ add_local_maximum_point in process_horizontal.hpp
+                        ring_util::add_local_maximum_point(
+                            bound_idx,
+                            pair_bound_idx,
+                            bounds,
+                            ael.as_slice(),
+                            geo_types::Coord { x: max_pt.x, y: max_pt.y },
+                            manager,
+                        );
+                    }
+                }
+
                 // Process the maxima (note: do_maxima takes positions, not indices)
                 do_maxima(
                     i,
@@ -450,6 +486,19 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
         };
 
         if current_edge_is_horizontal(bound) {
+            // Add current position to ring before processing horizontal
+            // PORT FROM: C++ process_horizontal adds points during traversal
+            if bound.ring.is_some() {
+                // Add the edge top point when we finish processing
+                let edge_top = bound.current_edge().top;
+                ring_util::add_point_to_ring(
+                    bound_idx,
+                    bounds,
+                    geo_types::Coord { x: edge_top.x, y: edge_top.y },
+                    manager,
+                );
+            }
+
             // Process the horizontal edge
             process_horizontal(
                 i,

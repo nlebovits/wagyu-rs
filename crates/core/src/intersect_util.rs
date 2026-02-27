@@ -15,6 +15,7 @@ use num_traits::ToPrimitive;
 use crate::active_edge_list::ActiveEdgeList;
 use crate::bound::{Bound, Edge};
 use crate::build_edges::slopes_equal_4pt;
+use crate::build_result::RingManager;
 use crate::config::{EdgeSide, FillType, PolygonType};
 use crate::intersect::{IntersectList, IntersectNode};
 use crate::point::Point;
@@ -229,6 +230,23 @@ pub fn is_even_odd_fill_type<T: CoordNum>(
     }
 }
 
+/// Check if the alternate polygon type uses even-odd fill.
+///
+/// From C++: `is_even_odd_alt_fill_type(bound, subject_fill_type, clip_fill_type)`
+///
+/// This is used when updating winding_count2, which tracks the winding
+/// relative to the OTHER polygon type.
+pub fn is_even_odd_fill_type_alt<T: CoordNum>(
+    bound: &Bound<T>,
+    subject_fill_type: FillType,
+    clip_fill_type: FillType,
+) -> bool {
+    match bound.poly_type {
+        PolygonType::Subject => clip_fill_type == FillType::EvenOdd,
+        PolygonType::Clip => subject_fill_type == FillType::EvenOdd,
+    }
+}
+
 /// Get the effective winding count for a bound based on fill type.
 fn get_winding_count(winding: i32, fill_type: FillType) -> i32 {
     match fill_type {
@@ -320,13 +338,96 @@ pub fn update_winding_counts<T: CoordNum>(
     }
 }
 
+/// Add a point to a bound's ring at an intersection.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - add_point
+///
+/// This adds the intersection point to the bound's ring if one exists.
+fn add_point<T: CoordNum>(bound: &mut Bound<T>, pt: Point<T>, manager: &mut RingManager<T>) {
+    if let Some(ring_idx) = bound.ring {
+        // Check if this point differs from last_point
+        if pt.x != bound.last_point.x || pt.y != bound.last_point.y {
+            if let Some(ring) = manager.get_mut(ring_idx) {
+                ring.add_point(geo_types::Coord { x: pt.x, y: pt.y });
+            }
+            bound.last_point = pt;
+        }
+    }
+}
+
+/// Add a local maximum point where two bounds meet at an intersection.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - add_local_maximum_point
+///
+/// When two contributing bounds intersect in a way that closes/merges rings,
+/// this handles the ring operations.
+fn add_local_maximum_point_at_intersection<T: CoordNum>(
+    b1: &mut Bound<T>,
+    b2: &mut Bound<T>,
+    pt: Point<T>,
+    manager: &mut RingManager<T>,
+) {
+    // Add point to b1's ring
+    add_point(b1, pt, manager);
+
+    // Check if both bounds share the same ring
+    if b1.ring == b2.ring {
+        // Close the ring
+        b1.ring = None;
+        b2.ring = None;
+    } else if b1.ring.is_some() && b2.ring.is_some() {
+        // Different rings - append one to the other
+        // TODO: Full implementation would call append_ring here based on ring indices
+        b1.ring = None;
+        b2.ring = None;
+    }
+}
+
+/// Add a local minimum point where two non-contributing bounds become contributing.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - add_local_minimum_point
+///
+/// When two non-contributing bounds of different polygon types intersect
+/// in a way that starts output, this creates a new ring.
+fn add_local_minimum_point_at_intersection<T: CoordNum>(
+    b1: &mut Bound<T>,
+    b2: &mut Bound<T>,
+    pt: Point<T>,
+    manager: &mut RingManager<T>,
+) {
+    // Create a new ring and add the point
+    let ring = crate::Ring::new(vec![geo_types::Coord { x: pt.x, y: pt.y }]);
+    let ring_idx = manager.add_ring(ring);
+
+    // Determine which bound gets left side based on dx
+    let b1_dx = b1.current_edge().dx;
+    let b2_dx = b2.current_edge().dx;
+
+    if b1_dx > b2_dx {
+        b1.ring = Some(ring_idx);
+        b1.side = EdgeSide::Left;
+        b1.last_point = pt;
+
+        b2.ring = Some(ring_idx);
+        b2.side = EdgeSide::Right;
+        b2.last_point = pt;
+    } else {
+        b1.ring = Some(ring_idx);
+        b1.side = EdgeSide::Right;
+        b1.last_point = pt;
+
+        b2.ring = Some(ring_idx);
+        b2.side = EdgeSide::Left;
+        b2.last_point = pt;
+    }
+}
+
 /// Process an intersection between two bounds.
 ///
 /// From C++: `intersect_bounds(b1, b2, pt, cliptype, ...)`
 ///
-/// This is a simplified version that handles winding count updates and
-/// side/ring swapping. Full ring manipulation is deferred to a separate
-/// ring management module.
+/// This handles winding count updates, side/ring swapping, and
+/// adding intersection points to rings.
 ///
 /// # Arguments
 /// * `b1` - First bound
@@ -335,13 +436,15 @@ pub fn update_winding_counts<T: CoordNum>(
 /// * `cliptype` - Boolean operation type
 /// * `subject_fill_type` - Fill rule for subject
 /// * `clip_fill_type` - Fill rule for clip
+/// * `manager` - Ring manager for output
 pub fn intersect_bounds<T: CoordNum>(
     b1: &mut Bound<T>,
     b2: &mut Bound<T>,
-    _pt: Point<T>,
+    pt: Point<T>,
     _cliptype: Operation,
     subject_fill_type: FillType,
     clip_fill_type: FillType,
+    manager: &mut RingManager<T>,
 ) {
     // Update winding counts
     update_winding_counts(b1, b2, subject_fill_type, clip_fill_type);
@@ -358,26 +461,39 @@ pub fn intersect_bounds<T: CoordNum>(
     // Handle intersection based on contribution status
     if b1_contributing && b2_contributing {
         if (b1_wc != 0 && b1_wc != 1) || (b2_wc != 0 && b2_wc != 1) {
-            // Add local maximum point (deferred to ring manager)
+            // Add local maximum point - rings meet and close/merge
+            // PORT FROM: C++ intersect_bounds case where both contribute but winding unusual
+            add_local_maximum_point_at_intersection(b1, b2, pt, manager);
         } else {
+            // Add point to both rings before swapping
+            add_point(b1, pt, manager);
+            add_point(b2, pt, manager);
+
             // Swap sides and rings
             swap_sides(b1, b2);
             swap_rings(b1, b2);
         }
     } else if b1_contributing {
         if b2_wc == 0 || b2_wc == 1 {
+            // Add point to b1's ring before swapping
+            add_point(b1, pt, manager);
+
             swap_sides(b1, b2);
             swap_rings(b1, b2);
         }
     } else if b2_contributing {
         if b1_wc == 0 || b1_wc == 1 {
+            // Add point to b2's ring before swapping
+            add_point(b2, pt, manager);
+
             swap_sides(b1, b2);
             swap_rings(b1, b2);
         }
     } else if (b1_wc == 0 || b1_wc == 1) && (b2_wc == 0 || b2_wc == 1) {
         // Neither contributing - may start a new output region
         if b1.poly_type != b2.poly_type {
-            // Different polygon types - add local minimum point (deferred)
+            // Different polygon types - add local minimum point to start output
+            add_local_minimum_point_at_intersection(b1, b2, pt, manager);
         } else {
             swap_sides(b1, b2);
         }
@@ -397,6 +513,7 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
     cliptype: Operation,
     subject_fill_type: FillType,
     clip_fill_type: FillType,
+    manager: &mut RingManager<T>,
 ) {
     for node in intersects.iter() {
         let idx1 = node.bound1_index;
@@ -425,6 +542,7 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
                 cliptype,
                 subject_fill_type,
                 clip_fill_type,
+                manager,
             );
 
             // Swap positions in AEL
@@ -443,6 +561,7 @@ pub fn process_intersections<T>(
     cliptype: Operation,
     subject_fill_type: FillType,
     clip_fill_type: FillType,
+    manager: &mut RingManager<T>,
 ) where
     T: CoordNum + ToPrimitive + num_traits::NumCast,
 {
@@ -472,6 +591,7 @@ pub fn process_intersections<T>(
         cliptype,
         subject_fill_type,
         clip_fill_type,
+        manager,
     );
 }
 
@@ -818,6 +938,11 @@ mod tests {
         b1.side = EdgeSide::Left;
         b2.side = EdgeSide::Right;
 
+        let mut manager: RingManager<f64> = RingManager::new();
+        // Add placeholder rings so the indices are valid
+        manager.add_ring(crate::Ring::empty());
+        manager.add_ring(crate::Ring::empty());
+
         intersect_bounds(
             &mut b1,
             &mut b2,
@@ -825,6 +950,7 @@ mod tests {
             Operation::Union,
             FillType::EvenOdd,
             FillType::EvenOdd,
+            &mut manager,
         );
 
         // Sides should be swapped
