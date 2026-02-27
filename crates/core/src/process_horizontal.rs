@@ -423,56 +423,77 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
         };
 
         // Check if this bound has reached its maxima
-        if is_maxima(bound, scanline_y) {
+        // PORT FROM: C++ lines 77-88 in process_maxima.hpp
+        let mut is_maxima_edge = is_maxima(bound, scanline_y);
+
+        if is_maxima_edge {
             // Find the maxima pair (note: argument order is bound_pos, bounds, ael)
             if let Some(pair_pos) = get_maxima_pair(i, bounds, ael) {
                 // Get the pair's bound index for ring operations
                 let pair_idx = ael.get(pair_pos);
 
-                // Check if both bounds have rings before calling add_local_maximum_point
-                // From C++: if ((*horz_bound)->ring && (*bound_max_pair)->ring)
-                let both_have_rings = {
-                    let b1_has_ring = bounds
-                        .get(bound_idx)
-                        .map(|b| b.ring.is_some())
-                        .unwrap_or(false);
-                    let b2_has_ring = pair_idx
-                        .and_then(|idx| bounds.get(idx))
-                        .map(|b| b.ring.is_some())
-                        .unwrap_or(false);
-                    b1_has_ring && b2_has_ring
-                };
+                // CRITICAL: Check if the pair is ALSO at maxima!
+                // From C++ lines 81-82:
+                // is_maxima_edge = ((bnd_max_pair == active_bounds.end() || !current_edge_is_horizontal<T>(bnd_max_pair)) &&
+                //                   is_maxima(bnd_max_pair, top_y));
+                // Both bounds must be at maxima to process as a maxima pair
+                let pair_is_maxima = pair_idx
+                    .and_then(|idx| bounds.get(idx))
+                    .map(|pair_bound| {
+                        // Check: pair's edge is not horizontal AND pair is at maxima
+                        !pair_bound.current_edge().is_horizontal()
+                            && is_maxima(pair_bound, scanline_y)
+                    })
+                    .unwrap_or(false);
 
-                if both_have_rings {
-                    if let Some(pair_bound_idx) = pair_idx {
-                        // Get the maximum point (top of current edge)
-                        let max_pt = bounds[bound_idx].current_edge().top;
+                is_maxima_edge = pair_is_maxima;
 
-                        // Add local maximum point to close/merge rings
-                        // PORT FROM: C++ add_local_maximum_point in process_horizontal.hpp
-                        ring_util::add_local_maximum_point(
-                            bound_idx,
-                            pair_bound_idx,
-                            bounds,
-                            ael.as_slice(),
-                            geo_types::Coord { x: max_pt.x, y: max_pt.y },
-                            manager,
-                        );
+                if is_maxima_edge {
+                    // Check if both bounds have rings before calling add_local_maximum_point
+                    // From C++: if ((*horz_bound)->ring && (*bound_max_pair)->ring)
+                    let both_have_rings = {
+                        let b1_has_ring = bounds
+                            .get(bound_idx)
+                            .map(|b| b.ring.is_some())
+                            .unwrap_or(false);
+                        let b2_has_ring = pair_idx
+                            .and_then(|idx| bounds.get(idx))
+                            .map(|b| b.ring.is_some())
+                            .unwrap_or(false);
+                        b1_has_ring && b2_has_ring
+                    };
+
+                    if both_have_rings {
+                        if let Some(pair_bound_idx) = pair_idx {
+                            // Get the maximum point (top of current edge)
+                            let max_pt = bounds[bound_idx].current_edge().top;
+
+                            // Add local maximum point to close/merge rings
+                            // PORT FROM: C++ add_local_maximum_point in process_horizontal.hpp
+                            ring_util::add_local_maximum_point(
+                                bound_idx,
+                                pair_bound_idx,
+                                bounds,
+                                ael.as_slice(),
+                                geo_types::Coord { x: max_pt.x, y: max_pt.y },
+                                manager,
+                            );
+                        }
                     }
-                }
 
-                // Process the maxima (note: do_maxima takes positions, not indices)
-                do_maxima(
-                    i,
-                    pair_pos,
-                    bounds,
-                    ael,
-                    clip_type,
-                    subject_fill_type,
-                    clip_fill_type,
-                );
-                // do_maxima may have removed entries from ael, so don't increment i
-                continue;
+                    // Process the maxima (note: do_maxima takes positions, not indices)
+                    do_maxima(
+                        i,
+                        pair_pos,
+                        bounds,
+                        ael,
+                        clip_type,
+                        subject_fill_type,
+                        clip_fill_type,
+                    );
+                    // do_maxima may have removed entries from ael, so don't increment i
+                    continue;
+                }
             }
         }
 
