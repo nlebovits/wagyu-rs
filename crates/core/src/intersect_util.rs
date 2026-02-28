@@ -540,11 +540,21 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
         }
     }
 
-    // Clear the removed ring's points
-    if let Some(remove_ring) = manager.get_mut(remove_idx) {
-        remove_ring.points_mut().clear();
-        remove_ring.clear_children();
-    }
+    // PORT FROM: wagyu C++ append_ring (ring_util.hpp:582)
+    // C++ sets: remove_ring->points = nullptr; remove_ring->bottom_point = nullptr;
+    // This clears the START POINTER but does NOT delete the points (they're in keep_ring now).
+    // We DON'T call points_mut().clear() because that would delete the data from our Vec.
+    // Instead, we just leave the removed ring as-is - its points were already copied to keep_ring.
+    // The ring1_replaces_ring2 call handles reparenting children.
+    //
+    // DIVERGENCE FROM WAGYU:
+    // - C++ uses linked lists where clearing the start pointer orphans the points
+    // - Rust uses Vec where we copied points to keep_ring, so remove_ring's points
+    //   are duplicates that will be unused. We could clear them for memory efficiency,
+    //   but it's not required for correctness.
+    //
+    // NOTE: Clearing points here was causing bugs where other bounds still referencing
+    // this ring index would find it empty after merge.
 
     // Clear ring references on both bounds (they meet at max, so done contributing)
     b1.ring = None;
