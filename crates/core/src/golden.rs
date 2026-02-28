@@ -116,6 +116,167 @@ fn json_ring_to_linestring(ring: &JsonRing) -> LineString<i64> {
     LineString::new(coords)
 }
 
+// =============================================================================
+// GEOMETRY COMPARISON
+// =============================================================================
+//
+// These functions implement proper geometry comparison that handles:
+// - Ring rotation (rings can start at any vertex)
+// - Ring/polygon ordering (unordered collections)
+// - Coordinate comparison (exact for integers)
+//
+// PORT FROM: wagyu C++ uses direct coordinate comparison in unit tests
+// DIVERGENCE: We add normalization to handle rotated/reordered outputs
+
+/// Normalize a ring by rotating it to start at the lexicographically smallest coordinate.
+///
+/// This handles the case where two rings are topologically equal but start at
+/// different vertices. For example, `[A,B,C,A]` equals `[B,C,A,B]` topologically.
+///
+/// The closing coordinate (which duplicates the first) is preserved.
+pub fn normalize_ring(ring: &LineString<i64>) -> LineString<i64> {
+    let coords = &ring.0;
+
+    // Empty or degenerate ring
+    if coords.len() <= 1 {
+        return ring.clone();
+    }
+
+    // Find the index of the lexicographically smallest coordinate
+    // (excluding the closing duplicate if present)
+    let len = if coords.len() > 1 && coords.first() == coords.last() {
+        coords.len() - 1 // Exclude closing point for rotation
+    } else {
+        coords.len()
+    };
+
+    if len == 0 {
+        return ring.clone();
+    }
+
+    let min_idx = (0..len)
+        .min_by(|&a, &b| {
+            let ca = &coords[a];
+            let cb = &coords[b];
+            ca.x.cmp(&cb.x).then_with(|| ca.y.cmp(&cb.y))
+        })
+        .unwrap_or(0);
+
+    // Rotate coordinates to start at min_idx
+    let mut rotated: Vec<Coord<i64>> = Vec::with_capacity(coords.len());
+    for i in 0..len {
+        rotated.push(coords[(min_idx + i) % len]);
+    }
+
+    // Add closing point if original had one
+    if coords.len() > 1 && coords.first() == coords.last() {
+        rotated.push(rotated[0]);
+    }
+
+    LineString::new(rotated)
+}
+
+/// Create a sortable key for a ring (for ordering rings within a polygon).
+///
+/// Returns the lexicographically smallest coordinate as a tuple.
+fn ring_sort_key(ring: &LineString<i64>) -> (i64, i64) {
+    ring.0
+        .iter()
+        .map(|c| (c.x, c.y))
+        .min()
+        .unwrap_or((i64::MAX, i64::MAX))
+}
+
+/// Normalize a polygon for comparison.
+///
+/// - Normalizes the exterior ring
+/// - Normalizes and sorts interior rings (holes)
+pub fn normalize_polygon(poly: &Polygon<i64>) -> Polygon<i64> {
+    let normalized_exterior = normalize_ring(poly.exterior());
+
+    let mut normalized_interiors: Vec<LineString<i64>> =
+        poly.interiors().iter().map(normalize_ring).collect();
+
+    // Sort holes by their sort key for consistent ordering
+    normalized_interiors.sort_by_key(ring_sort_key);
+
+    Polygon::new(normalized_exterior, normalized_interiors)
+}
+
+/// Create a sortable key for a polygon (for ordering polygons in a multi-polygon).
+///
+/// Uses the exterior ring's sort key.
+fn polygon_sort_key(poly: &Polygon<i64>) -> (i64, i64) {
+    ring_sort_key(poly.exterior())
+}
+
+/// Normalize a multi-polygon for comparison.
+///
+/// - Normalizes each polygon
+/// - Sorts polygons for consistent ordering
+pub fn normalize_multi_polygon(mp: &MultiPolygon<i64>) -> MultiPolygon<i64> {
+    let mut normalized: Vec<Polygon<i64>> = mp.0.iter().map(normalize_polygon).collect();
+
+    // Sort polygons by their sort key
+    normalized.sort_by_key(polygon_sort_key);
+
+    MultiPolygon::new(normalized)
+}
+
+/// Compare two multi-polygons for geometric equality.
+///
+/// This handles:
+/// - Ring rotation (rings can start at any vertex)
+/// - Ring ordering (holes can be in any order)
+/// - Polygon ordering (polygons in multi-polygon can be in any order)
+///
+/// Returns `true` if the multi-polygons are geometrically equivalent.
+pub fn multi_polygons_equal(a: &MultiPolygon<i64>, b: &MultiPolygon<i64>) -> bool {
+    let norm_a = normalize_multi_polygon(a);
+    let norm_b = normalize_multi_polygon(b);
+
+    norm_a == norm_b
+}
+
+/// Assert that two multi-polygons are geometrically equal.
+///
+/// Provides detailed error messages showing the normalized forms.
+pub fn assert_multi_polygons_equal(
+    result: &MultiPolygon<i64>,
+    expected: &MultiPolygon<i64>,
+    context: &str,
+) {
+    let norm_result = normalize_multi_polygon(result);
+    let norm_expected = normalize_multi_polygon(expected);
+
+    if norm_result != norm_expected {
+        // Build detailed error message
+        let result_str = format_multi_polygon(&norm_result);
+        let expected_str = format_multi_polygon(&norm_expected);
+
+        panic!(
+            "Geometry mismatch for {}\n\nResult (normalized):\n{}\n\nExpected (normalized):\n{}",
+            context, result_str, expected_str
+        );
+    }
+}
+
+/// Format a multi-polygon for debug output.
+fn format_multi_polygon(mp: &MultiPolygon<i64>) -> String {
+    let mut result = String::new();
+    for (i, poly) in mp.0.iter().enumerate() {
+        result.push_str(&format!("  Polygon {}:\n", i));
+        result.push_str(&format!("    Exterior: {:?}\n", poly.exterior().0));
+        for (j, hole) in poly.interiors().iter().enumerate() {
+            result.push_str(&format!("    Hole {}: {:?}\n", j, hole.0));
+        }
+    }
+    if result.is_empty() {
+        result.push_str("  (empty)");
+    }
+    result
+}
+
 /// Parse operation type from expected filename
 ///
 /// Expected files are named like: `{operation}-{description}.json`
@@ -354,13 +515,203 @@ mod tests {
 
         let result = subject.boolean_op(&clip, operation);
 
-        // Compare result with expected
-        // TODO: Implement proper comparison that handles coordinate ordering
+        // Compare result with expected using proper geometry comparison
+        assert_multi_polygons_equal(&result, &expected, expected_file);
+    }
+
+    // -------------------------------------------------------------------------
+    // Geometry Comparison Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_ring_rotation() {
+        // Ring starting at different points should normalize to same form
+        // [0,0] -> [1,0] -> [1,1] -> [0,0] (starts at lexicographically smallest)
+        let ring1 = LineString::new(vec![
+            Coord { x: 0, y: 0 },
+            Coord { x: 1, y: 0 },
+            Coord { x: 1, y: 1 },
+            Coord { x: 0, y: 0 },
+        ]);
+
+        // Same ring but starting at [1,0]
+        let ring2 = LineString::new(vec![
+            Coord { x: 1, y: 0 },
+            Coord { x: 1, y: 1 },
+            Coord { x: 0, y: 0 },
+            Coord { x: 1, y: 0 },
+        ]);
+
+        let norm1 = normalize_ring(&ring1);
+        let norm2 = normalize_ring(&ring2);
+
+        assert_eq!(norm1, norm2, "Rotated rings should normalize to same form");
+
+        // Verify first point is the lexicographically smallest
+        assert_eq!(norm1.0[0], Coord { x: 0, y: 0 });
+    }
+
+    #[test]
+    fn test_normalize_ring_lex_ordering() {
+        // When x values are equal, sort by y
+        let ring = LineString::new(vec![
+            Coord { x: 0, y: 5 },
+            Coord { x: 0, y: 0 }, // This should become first (same x, smaller y)
+            Coord { x: 1, y: 0 },
+            Coord { x: 0, y: 5 },
+        ]);
+
+        let normalized = normalize_ring(&ring);
+
         assert_eq!(
-            result.0.len(),
-            expected.0.len(),
-            "Result polygon count mismatch for {}",
-            expected_file
+            normalized.0[0],
+            Coord { x: 0, y: 0 },
+            "Should start at lex smallest (0,0)"
+        );
+    }
+
+    #[test]
+    fn test_normalize_polygon_sorts_holes() {
+        // Polygon with two holes in different orders should normalize the same
+        let exterior = LineString::new(vec![
+            Coord { x: 0, y: 0 },
+            Coord { x: 10, y: 0 },
+            Coord { x: 10, y: 10 },
+            Coord { x: 0, y: 10 },
+            Coord { x: 0, y: 0 },
+        ]);
+
+        let hole1 = LineString::new(vec![
+            Coord { x: 1, y: 1 },
+            Coord { x: 2, y: 1 },
+            Coord { x: 2, y: 2 },
+            Coord { x: 1, y: 1 },
+        ]);
+
+        let hole2 = LineString::new(vec![
+            Coord { x: 5, y: 5 },
+            Coord { x: 6, y: 5 },
+            Coord { x: 6, y: 6 },
+            Coord { x: 5, y: 5 },
+        ]);
+
+        // Polygon with holes in order [hole1, hole2]
+        let poly_a = Polygon::new(exterior.clone(), vec![hole1.clone(), hole2.clone()]);
+        // Polygon with holes in order [hole2, hole1]
+        let poly_b = Polygon::new(exterior.clone(), vec![hole2, hole1]);
+
+        let norm_a = normalize_polygon(&poly_a);
+        let norm_b = normalize_polygon(&poly_b);
+
+        assert_eq!(
+            norm_a, norm_b,
+            "Polygons with reordered holes should be equal after normalization"
+        );
+    }
+
+    #[test]
+    fn test_multi_polygons_equal_reordered() {
+        // Two multi-polygons with polygons in different order
+        let poly1 = Polygon::new(
+            LineString::new(vec![
+                Coord { x: 0, y: 0 },
+                Coord { x: 1, y: 0 },
+                Coord { x: 1, y: 1 },
+                Coord { x: 0, y: 0 },
+            ]),
+            vec![],
+        );
+
+        let poly2 = Polygon::new(
+            LineString::new(vec![
+                Coord { x: 10, y: 10 },
+                Coord { x: 11, y: 10 },
+                Coord { x: 11, y: 11 },
+                Coord { x: 10, y: 10 },
+            ]),
+            vec![],
+        );
+
+        let mp_a = MultiPolygon::new(vec![poly1.clone(), poly2.clone()]);
+        let mp_b = MultiPolygon::new(vec![poly2, poly1]);
+
+        assert!(
+            multi_polygons_equal(&mp_a, &mp_b),
+            "Multi-polygons with reordered polygons should be equal"
+        );
+    }
+
+    #[test]
+    fn test_multi_polygons_equal_rotated_rings() {
+        // Same polygon but ring starts at different vertex
+        let poly1 = Polygon::new(
+            LineString::new(vec![
+                Coord { x: 0, y: 0 },
+                Coord { x: 1, y: 0 },
+                Coord { x: 1, y: 1 },
+                Coord { x: 0, y: 0 },
+            ]),
+            vec![],
+        );
+
+        let poly2 = Polygon::new(
+            LineString::new(vec![
+                Coord { x: 1, y: 0 }, // Started at different vertex
+                Coord { x: 1, y: 1 },
+                Coord { x: 0, y: 0 },
+                Coord { x: 1, y: 0 },
+            ]),
+            vec![],
+        );
+
+        let mp_a = MultiPolygon::new(vec![poly1]);
+        let mp_b = MultiPolygon::new(vec![poly2]);
+
+        assert!(
+            multi_polygons_equal(&mp_a, &mp_b),
+            "Multi-polygons with rotated rings should be equal"
+        );
+    }
+
+    #[test]
+    fn test_multi_polygons_not_equal_different_coords() {
+        let poly1 = Polygon::new(
+            LineString::new(vec![
+                Coord { x: 0, y: 0 },
+                Coord { x: 1, y: 0 },
+                Coord { x: 1, y: 1 },
+                Coord { x: 0, y: 0 },
+            ]),
+            vec![],
+        );
+
+        let poly2 = Polygon::new(
+            LineString::new(vec![
+                Coord { x: 0, y: 0 },
+                Coord { x: 2, y: 0 }, // Different coordinate!
+                Coord { x: 2, y: 2 },
+                Coord { x: 0, y: 0 },
+            ]),
+            vec![],
+        );
+
+        let mp_a = MultiPolygon::new(vec![poly1]);
+        let mp_b = MultiPolygon::new(vec![poly2]);
+
+        assert!(
+            !multi_polygons_equal(&mp_a, &mp_b),
+            "Multi-polygons with different coordinates should NOT be equal"
+        );
+    }
+
+    #[test]
+    fn test_empty_multi_polygons_equal() {
+        let mp_a: MultiPolygon<i64> = MultiPolygon::new(vec![]);
+        let mp_b: MultiPolygon<i64> = MultiPolygon::new(vec![]);
+
+        assert!(
+            multi_polygons_equal(&mp_a, &mp_b),
+            "Empty multi-polygons should be equal"
         );
     }
 }
