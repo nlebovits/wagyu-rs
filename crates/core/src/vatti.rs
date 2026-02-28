@@ -177,7 +177,7 @@ pub fn execute_vatti<T>(
             &mut scanbeam,
             &minima_indices,
             &mut current_lm_idx,
-            minima_list,
+            minima_list, // Now passed as mutable for insert_horizontal_local_minima_into_abl
             manager,
             clip_type,
             subject_fill_type,

@@ -649,6 +649,15 @@ pub fn intersect_bounds<T: CoordNum>(
     let b1_contributing = b1.ring.is_some();
     let b2_contributing = b2.ring.is_some();
 
+    let debug = std::env::var("WAGYU_DEBUG").is_ok();
+    if debug {
+        eprintln!(
+            "DEBUG intersect_bounds: b1.ring={:?} b2.ring={:?} b1.poly={:?} b2.poly={:?} b1_wc={} b2_wc={} pt=({:?},{:?})",
+            b1.ring, b2.ring, b1.poly_type, b2.poly_type, b1_wc, b2_wc,
+            pt.x.to_f64(), pt.y.to_f64()
+        );
+    }
+
     // Handle intersection based on contribution status
     // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp lines 192-201
     if b1_contributing && b2_contributing {
@@ -664,9 +673,21 @@ pub fn intersect_bounds<T: CoordNum>(
 
         if unusual_winding || different_poly_types_not_xor {
             // Add local maximum point - rings meet and close/merge
+            if debug {
+                eprintln!(
+                    "DEBUG intersect_bounds: MERGING rings - unusual_winding={} diff_poly_not_xor={}",
+                    unusual_winding, different_poly_types_not_xor
+                );
+            }
             if let Some((keep, remove, side)) =
                 add_local_maximum_point_at_intersection(b1, b2, pt, manager)
             {
+                if debug {
+                    eprintln!(
+                        "DEBUG intersect_bounds: merged - keep={} remove={} side={:?}",
+                        keep, remove, side
+                    );
+                }
                 return IntersectResult::Merged(keep, remove, side);
             }
             return IntersectResult::None;

@@ -442,6 +442,241 @@ mod tests {
         );
     }
 
+    // =========================================================================
+    // SHARED EDGE BUG TESTS (TDD RED PHASE)
+    //
+    // Issue #26: When two polygons share a collinear boundary segment (a shared
+    // edge), boolean operations produce wrong output. The union of two adjacent
+    // polygons with a shared edge should produce a single merged polygon, but
+    // the current implementation returns 2 separate polygons.
+    //
+    // These tests are written BEFORE the fix (TDD red phase) and are expected
+    // to FAIL until the shared-edge bug is resolved.
+    // =========================================================================
+
+    /// Shared-edge union: two adjacent unit squares with a common vertical edge.
+    ///
+    /// Geometry:
+    ///   Square A (subject): (0,0)-(1,0)-(1,1)-(0,1)
+    ///   Square B (clip):    (1,0)-(2,0)-(2,1)-(1,1)
+    ///   Shared edge: x=1 segment from (1,0) to (1,1)
+    ///
+    /// Expected union: one rectangle (0,0)-(2,0)-(2,1)-(0,1)
+    ///   - Exactly 1 output polygon
+    ///   - 4 distinct vertices (closed ring = 5 coords in geo_types)
+    ///
+    /// Bug: the shared edge at x=1 causes the algorithm to produce 2 separate
+    /// polygons instead of merging them into the bounding rectangle.
+    #[test]
+    fn shared_edge_union_two_adjacent_unit_squares() {
+        let mut clipper: Wagyu<i64> = Wagyu::new();
+
+        // Square A: (0,0) -> (1,0) -> (1,1) -> (0,1), CCW winding
+        let subject = vec![
+            Point::new(0i64, 0),
+            Point::new(1, 0),
+            Point::new(1, 1),
+            Point::new(0, 1),
+        ];
+
+        // Square B: (1,0) -> (2,0) -> (2,1) -> (1,1), CCW winding
+        // Shares the edge from (1,0) to (1,1) with Square A
+        let clip = vec![
+            Point::new(1i64, 0),
+            Point::new(2, 0),
+            Point::new(2, 1),
+            Point::new(1, 1),
+        ];
+
+        let subject_added = clipper.add_ring(&subject, PolygonType::Subject);
+        let clip_added = clipper.add_ring(&clip, PolygonType::Clip);
+
+        assert!(
+            subject_added,
+            "Subject (Square A) must be added successfully"
+        );
+        assert!(clip_added, "Clip (Square B) must be added successfully");
+
+        let result = clipper
+            .execute(Operation::Union, FillType::EvenOdd, FillType::EvenOdd)
+            .expect("execute must not fail");
+
+        // Union of two adjacent unit squares sharing a vertical edge at x=1
+        // should merge into one 2x1 rectangle
+        assert_eq!(
+            result.0.len(),
+            1,
+            "Union of two adjacent squares sharing an edge must produce \
+            exactly 1 merged rectangle, got {} polygon(s). \
+            Bug #26: shared collinear edges prevent correct ring merging.",
+            result.0.len()
+        );
+
+        // The merged rectangle should have 4 distinct vertices (5 coords closed).
+        // However, the current implementation may produce an extra collinear vertex
+        // at (1,0) where the two squares meet. This is a separate cleanup issue.
+        let poly = &result.0[0];
+        let exterior = poly.exterior();
+
+        // Core fix validation: polygon should be 5-6 coords (4-5 distinct vertices)
+        // 5 coords = ideal (no collinear), 6 coords = includes shared vertex
+        assert!(
+            exterior.0.len() >= 5 && exterior.0.len() <= 6,
+            "Merged rectangle must have 4-5 distinct vertices (5-6 coords in closed ring), \
+            got {} coords. If > 6, ring merging failed.",
+            exterior.0.len()
+        );
+
+        // Verify the bounding box is correct (0,0) to (2,1)
+        let coords: Vec<_> = exterior.0.iter().collect();
+        let min_x = coords.iter().map(|c| c.x).min().unwrap();
+        let max_x = coords.iter().map(|c| c.x).max().unwrap();
+        let min_y = coords.iter().map(|c| c.y).min().unwrap();
+        let max_y = coords.iter().map(|c| c.y).max().unwrap();
+
+        assert_eq!(min_x, 0, "Rectangle must start at x=0");
+        assert_eq!(max_x, 2, "Rectangle must end at x=2");
+        assert_eq!(min_y, 0, "Rectangle must start at y=0");
+        assert_eq!(max_y, 1, "Rectangle must end at y=1");
+
+        // The result must have no holes
+        assert!(
+            poly.interiors().is_empty(),
+            "Union of two simple adjacent squares must produce no holes, \
+            got {} hole(s)",
+            poly.interiors().len()
+        );
+    }
+
+    /// Shared-edge union: two triangles sharing a horizontal base edge.
+    ///
+    /// Geometry:
+    ///   Triangle A (subject): (0,0)-(2,0)-(1,1)  [pointing up]
+    ///   Triangle B (clip):    (0,0)-(2,0)-(1,-1) [pointing down]
+    ///   Shared edge: the segment from (0,0) to (2,0) along y=0
+    ///
+    /// Expected union: one diamond (rhombus) with 4 vertices
+    ///   (0,0)-(2,0)-(1,1) merged with (0,0)-(2,0)-(1,-1)
+    ///   = diamond: (1,-1)-(2,0)-(1,1)-(0,0)
+    ///   - Exactly 1 output polygon
+    ///   - 4 distinct vertices (closed ring = 5 coords in geo_types)
+    ///
+    /// Bug: the shared horizontal edge at y=0 from (0,0) to (2,0) causes the
+    /// algorithm to produce 2 separate triangles instead of the diamond.
+    #[test]
+    fn shared_edge_union_two_triangles_sharing_base() {
+        let mut clipper: Wagyu<i64> = Wagyu::new();
+
+        // Triangle A pointing up: CCW winding
+        let subject = vec![Point::new(0i64, 0), Point::new(2, 0), Point::new(1, 1)];
+
+        // Triangle B pointing down: shares base (0,0)-(2,0) with Triangle A
+        // CCW winding: go around the outside counter-clockwise
+        let clip = vec![Point::new(0i64, 0), Point::new(1, -1), Point::new(2, 0)];
+
+        let subject_added = clipper.add_ring(&subject, PolygonType::Subject);
+        let clip_added = clipper.add_ring(&clip, PolygonType::Clip);
+
+        assert!(
+            subject_added,
+            "Subject (Triangle A) must be added successfully"
+        );
+        assert!(clip_added, "Clip (Triangle B) must be added successfully");
+
+        let result = clipper
+            .execute(Operation::Union, FillType::EvenOdd, FillType::EvenOdd)
+            .expect("execute must not fail");
+
+        // Union of two triangles sharing their base should produce one diamond
+        assert_eq!(
+            result.0.len(),
+            1,
+            "Union of two triangles sharing a base edge must produce \
+            exactly 1 diamond polygon, got {} polygon(s). \
+            Bug #26: shared collinear edges prevent correct ring merging.",
+            result.0.len()
+        );
+
+        // The diamond has exactly 4 distinct vertices
+        let poly = &result.0[0];
+        let exterior = poly.exterior();
+        assert_eq!(
+            exterior.0.len(),
+            5,
+            "Diamond must have 4 distinct vertices (5 coords in closed ring), \
+            got {} coords",
+            exterior.0.len()
+        );
+
+        // The result must have no holes
+        assert!(
+            poly.interiors().is_empty(),
+            "Union of two triangles must produce no holes, got {} hole(s)",
+            poly.interiors().len()
+        );
+    }
+
+    /// Shared-point (corner touch) union: two unit squares touching at a single corner.
+    ///
+    /// Geometry:
+    ///   Square A (subject): (0,0)-(1,0)-(1,1)-(0,1)
+    ///   Square B (clip):    (1,1)-(2,1)-(2,2)-(1,2)
+    ///   Contact: only a single shared point at (1,1), NOT a shared edge
+    ///
+    /// Expected union: two separate squares (they only touch at a point,
+    /// so they cannot be merged into a single simple polygon without
+    /// creating a self-touching boundary)
+    ///   - Exactly 2 output polygons
+    ///
+    /// This test is distinct from the shared-edge tests above: it validates
+    /// that polygons sharing only a corner point are NOT incorrectly merged.
+    /// It also exercises the point-contact topology path that may be affected
+    /// by the same underlying fix for issue #26.
+    #[test]
+    fn shared_point_union_two_squares_touching_at_corner() {
+        let mut clipper: Wagyu<i64> = Wagyu::new();
+
+        // Square A: (0,0) -> (1,0) -> (1,1) -> (0,1), CCW winding
+        let subject = vec![
+            Point::new(0i64, 0),
+            Point::new(1, 0),
+            Point::new(1, 1),
+            Point::new(0, 1),
+        ];
+
+        // Square B: (1,1) -> (2,1) -> (2,2) -> (1,2), CCW winding
+        // Only shares the single point (1,1) with Square A
+        let clip = vec![
+            Point::new(1i64, 1),
+            Point::new(2, 1),
+            Point::new(2, 2),
+            Point::new(1, 2),
+        ];
+
+        let subject_added = clipper.add_ring(&subject, PolygonType::Subject);
+        let clip_added = clipper.add_ring(&clip, PolygonType::Clip);
+
+        assert!(
+            subject_added,
+            "Subject (Square A) must be added successfully"
+        );
+        assert!(clip_added, "Clip (Square B) must be added successfully");
+
+        let result = clipper
+            .execute(Operation::Union, FillType::EvenOdd, FillType::EvenOdd)
+            .expect("execute must not fail");
+
+        // Two squares touching at a single corner point cannot form a single
+        // simple polygon. The correct result is 2 separate polygons.
+        assert_eq!(
+            result.0.len(),
+            2,
+            "Union of two squares touching only at a corner point must produce \
+            exactly 2 separate polygons (they cannot be merged), got {} polygon(s).",
+            result.0.len()
+        );
+    }
+
     /// Additional diagnostic: verify union works while intersection fails.
     ///
     /// If union produces 1 polygon (the L-shape covering both squares)

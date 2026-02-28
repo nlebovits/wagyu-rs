@@ -317,6 +317,163 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
     }
 }
 
+/// Insert horizontal local minima into the active edge list.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/active_bound_list.hpp - insert_horizontal_local_minima_into_ABL
+///
+/// This function processes local minima that have `minimum_has_horizontal = true`.
+/// It must be called BEFORE `process_horizontals` so that horizontal edges from
+/// newly inserted bounds can be processed at their correct scanline.
+///
+/// The key difference from `insert_local_minima_into_abl` is the additional check
+/// for `minimum_has_horizontal`. Since local minima are sorted with horizontal
+/// ones first at each Y, this function will process all horizontal LMs before
+/// the regular `insert_local_minima_into_abl` sees any remaining non-horizontal ones.
+///
+/// # Arguments
+/// Same as `insert_local_minima_into_abl`
+#[allow(clippy::too_many_arguments)]
+pub fn insert_horizontal_local_minima_into_abl<T: CoordNum + ToPrimitive>(
+    top_y: T,
+    minima_sorted: &mut LocalMinimumList<T>,
+    current_lm_idx: &mut usize,
+    bounds: &mut Vec<Bound<T>>,
+    ael: &mut ActiveEdgeList,
+    manager: &mut RingManager<T>,
+    scanbeam: &mut Scanbeam<T>,
+    cliptype: Operation,
+    subject_fill_type: FillType,
+    clip_fill_type: FillType,
+) {
+    let top_y_f64 = top_y.to_f64().unwrap_or(0.0);
+
+    // Process local minima that are at current Y AND have horizontal first edge
+    // From C++: while (current_lm != minima_sorted.end() && top_y == (*current_lm)->y && (*current_lm)->minimum_has_horizontal)
+    while *current_lm_idx < minima_sorted.len() {
+        let lm = &minima_sorted[*current_lm_idx];
+        let lm_y_f64 = lm.y.to_f64().unwrap_or(0.0);
+
+        // Check if this LM is at the current scanline
+        if (lm_y_f64 - top_y_f64).abs() > f64::EPSILON {
+            break;
+        }
+
+        // Check if this LM has a horizontal first edge
+        if !lm.minimum_has_horizontal {
+            break;
+        }
+
+        // Initialize the local minimum
+        initialize_lm(&mut minima_sorted[*current_lm_idx]);
+
+        // Take ownership of the bounds from the local minimum
+        let lm = &mut minima_sorted[*current_lm_idx];
+
+        // Extract the bounds - we need to move them out
+        let left_bound = std::mem::replace(
+            &mut lm.left_bound,
+            Bound::new_empty(crate::config::PolygonType::Subject, EdgeSide::Left),
+        );
+        let right_bound = std::mem::replace(
+            &mut lm.right_bound,
+            Bound::new_empty(crate::config::PolygonType::Subject, EdgeSide::Right),
+        );
+
+        // Insert bounds into bounds vector
+        let left_idx = bounds.len();
+        bounds.push(left_bound);
+        let right_idx = bounds.len();
+        bounds.push(right_bound);
+
+        // Link maximum_bound for simple cases
+        let left_max_top = bounds[left_idx].edges.last().map(|e| e.top);
+        let right_max_top = bounds[right_idx].edges.last().map(|e| e.top);
+        if left_max_top == right_max_top {
+            bounds[left_idx].maximum_bound = Some(right_idx);
+            bounds[right_idx].maximum_bound = Some(left_idx);
+        }
+
+        // Insert into AEL
+        ael.insert_pair(left_idx, right_idx, bounds);
+
+        // Find position of left bound in AEL for winding count calculation
+        let left_pos = ael.position(left_idx).unwrap_or(0);
+
+        // Set winding count for the left bound
+        winding::set_winding_count(
+            left_pos,
+            ael.as_slice(),
+            bounds,
+            subject_fill_type,
+            clip_fill_type,
+        );
+
+        // Copy winding counts to right bound
+        let (left_wc, left_wc2) = {
+            let left = &bounds[left_idx];
+            (left.winding_count, left.winding_count2)
+        };
+        bounds[right_idx].winding_count = left_wc;
+        bounds[right_idx].winding_count2 = left_wc2;
+
+        // DEBUG: Trace horizontal local minimum insertion
+        if std::env::var("WAGYU_DEBUG").is_ok() {
+            let bot = bounds[left_idx].current_edge().bot;
+            let poly_type = bounds[left_idx].poly_type;
+            let contributing = winding::is_contributing(
+                &bounds[left_idx],
+                cliptype,
+                subject_fill_type,
+                clip_fill_type,
+            );
+            eprintln!(
+                "DEBUG: Horizontal LM at ({},{}) poly_type={:?} wc={} wc2={} contributing={}",
+                bot.x.to_f64().unwrap_or(0.0),
+                bot.y.to_f64().unwrap_or(0.0),
+                poly_type,
+                left_wc,
+                left_wc2,
+                contributing
+            );
+        }
+
+        // Check if this local minimum contributes to output
+        if winding::is_contributing(
+            &bounds[left_idx],
+            cliptype,
+            subject_fill_type,
+            clip_fill_type,
+        ) {
+            // Create ring at this local minimum point
+            let pt = {
+                let bot = bounds[left_idx].current_edge().bot;
+                geo_types::Coord { x: bot.x, y: bot.y }
+            };
+            ring_util::add_local_minimum_point(
+                left_idx,
+                right_idx,
+                bounds,
+                ael.as_slice(),
+                pt,
+                manager,
+            );
+        }
+
+        // Add edge tops to scanbeam
+        let left_top = bounds[left_idx].current_edge().top.y;
+        let right_top = bounds[right_idx].current_edge().top.y;
+        scanbeam.insert(left_top);
+
+        // Only add right edge top if not horizontal
+        if !bounds[right_idx].current_edge().is_horizontal() {
+            scanbeam.insert(right_top);
+        }
+
+        // Move to next local minimum
+        *current_lm_idx += 1;
+    }
+}
+
 /// Update the current_x of a bound for a given Y coordinate.
 ///
 /// Uses the edge's slope (dx) to calculate the x position at y.

@@ -20,8 +20,9 @@ use crate::active_edge_list::ActiveEdgeList;
 use crate::bound::Bound;
 use crate::build_result::RingManager;
 use crate::config::{FillType, HorizontalDirection};
-use crate::intersect_util::{get_current_x, intersect_bounds};
+use crate::intersect_util::{get_current_x, intersect_bounds, IntersectResult};
 use crate::local_minimum::LocalMinimumList;
+use crate::local_minimum_util::insert_horizontal_local_minima_into_abl;
 use crate::point::Point;
 use crate::process_maxima::{do_maxima, get_maxima_pair, is_intermediate, is_maxima};
 use crate::ring_util;
@@ -204,7 +205,9 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
         );
 
         // Use split_at_mut to get two mutable references safely
-        {
+        // BUGFIX: Capture and handle IntersectResult to update other bounds
+        // when rings are merged during horizontal processing
+        let result = {
             let (b1, b2) = if horz_idx < next_idx {
                 let (left, right) = bounds.split_at_mut(next_idx);
                 (&mut left[horz_idx], &mut right[0])
@@ -221,7 +224,27 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
                 subject_fill_type,
                 clip_fill_type,
                 manager,
-            );
+            )
+        };
+
+        // Handle the intersection result
+        // PORT FROM: wagyu C++ implicitly handles this through active_bounds parameter
+        match result {
+            IntersectResult::Merged(keep_ring_idx, remove_ring_idx, keep_side) => {
+                // Update other active bounds that reference the removed ring
+                for &ab_idx in ael.as_slice() {
+                    if bounds[ab_idx].ring == Some(remove_ring_idx) {
+                        bounds[ab_idx].ring = Some(keep_ring_idx);
+                        bounds[ab_idx].side = keep_side;
+                        break; // C++ breaks after first match
+                    }
+                }
+            }
+            IntersectResult::NewRing(_ring_idx) => {
+                // Hole state would be set here if needed
+                // For horizontal processing, this is typically not triggered
+            }
+            IntersectResult::None => {}
         }
 
         // Swap positions in AEL
@@ -354,7 +377,9 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
         );
 
         // Use split_at_mut to get two mutable references safely
-        {
+        // BUGFIX: Capture and handle IntersectResult to update other bounds
+        // when rings are merged during horizontal processing
+        let result = {
             let (b1, b2) = if prev_idx < horz_idx {
                 let (left, right) = bounds.split_at_mut(horz_idx);
                 (&mut left[prev_idx], &mut right[0])
@@ -371,7 +396,27 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
                 subject_fill_type,
                 clip_fill_type,
                 manager,
-            );
+            )
+        };
+
+        // Handle the intersection result
+        // PORT FROM: wagyu C++ implicitly handles this through active_bounds parameter
+        match result {
+            IntersectResult::Merged(keep_ring_idx, remove_ring_idx, keep_side) => {
+                // Update other active bounds that reference the removed ring
+                for &ab_idx in ael.as_slice() {
+                    if bounds[ab_idx].ring == Some(remove_ring_idx) {
+                        bounds[ab_idx].ring = Some(keep_ring_idx);
+                        bounds[ab_idx].side = keep_side;
+                        break; // C++ breaks after first match
+                    }
+                }
+            }
+            IntersectResult::NewRing(_ring_idx) => {
+                // Hole state would be set here if needed
+                // For horizontal processing, this is typically not triggered
+            }
+            IntersectResult::None => {}
         }
 
         // Swap positions in AEL
@@ -548,11 +593,11 @@ pub fn update_all_current_x<T: CoordNum>(bounds: &mut [Bound<T>], ael: &ActiveEd
 pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
     scanline_y: T,
     ael: &mut ActiveEdgeList,
-    bounds: &mut [Bound<T>],
+    bounds: &mut Vec<Bound<T>>,
     scanbeam: &mut Scanbeam<T>,
     _minima_sorted: &[usize],
-    _current_lm_idx: &mut usize,
-    _minima_list: &LocalMinimumList<T>,
+    current_lm_idx: &mut usize,
+    minima_list: &mut LocalMinimumList<T>,
     manager: &mut RingManager<T>,
     clip_type: Operation,
     subject_fill_type: FillType,
@@ -696,8 +741,20 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
         i += 1;
     }
 
-    // 3. Insert horizontal local minima (TODO: implement)
+    // 3. Insert horizontal local minima
     // PORT FROM: C++ line 105-106 - insert_horizontal_local_minima_into_ABL
+    insert_horizontal_local_minima_into_abl(
+        scanline_y,
+        minima_list,
+        current_lm_idx,
+        bounds,
+        ael,
+        manager,
+        scanbeam,
+        clip_type,
+        subject_fill_type,
+        clip_fill_type,
+    );
 
     // Process horizontals
     // PORT FROM: C++ line 108
