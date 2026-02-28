@@ -335,7 +335,10 @@ impl<T: CoordNum> RingManager<T> {
 
     /// Check if a ring has been processed by correct_self_intersections.
     pub fn is_corrected(&self, ring_idx: usize) -> bool {
-        self.rings.get(ring_idx).map(|r| r.corrected).unwrap_or(false)
+        self.rings
+            .get(ring_idx)
+            .map(|r| r.corrected)
+            .unwrap_or(false)
     }
 
     /// Mark a ring as corrected (or uncorrected).
