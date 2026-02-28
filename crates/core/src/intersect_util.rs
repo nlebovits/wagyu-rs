@@ -476,14 +476,24 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
     ring2_idx: usize,
     manager: &mut RingManager<T>,
 ) -> (usize, usize, EdgeSide) {
-    // Determine which ring to keep (lower index = created first)
-    // C++ uses get_lower_most_ring based on bottom point, but for simplicity
-    // we use ring index ordering (matches C++ append_ring fallback behavior)
-    let (keep_idx, remove_idx, keep_side, remove_side) = if ring1_idx < ring2_idx {
-        (ring1_idx, ring2_idx, b1.side, b2.side)
-    } else {
-        (ring2_idx, ring1_idx, b2.side, b1.side)
-    };
+    use crate::ring_util::{get_lower_most_ring, ring1_child_below_ring2};
+
+    // Determine which ring to keep based on hierarchy and bottom point position
+    // PORT FROM: C++ append_ring logic (ring_util.hpp lines 510-530)
+    // Priority: 1) ancestry check, 2) get_lower_most_ring
+    let (keep_idx, remove_idx, keep_side, remove_side) =
+        if ring1_child_below_ring2(ring1_idx, ring2_idx, manager) {
+            // ring1 is a descendant of ring2, keep ring2
+            (ring2_idx, ring1_idx, b2.side, b1.side)
+        } else if ring1_child_below_ring2(ring2_idx, ring1_idx, manager) {
+            // ring2 is a descendant of ring1, keep ring1
+            (ring1_idx, ring2_idx, b1.side, b2.side)
+        } else if ring1_idx == get_lower_most_ring(ring1_idx, ring2_idx, manager) {
+            // Use get_lower_most_ring to determine which ring to keep
+            (ring1_idx, ring2_idx, b1.side, b2.side)
+        } else {
+            (ring2_idx, ring1_idx, b2.side, b1.side)
+        };
 
     // Get points from the ring to remove
     let remove_points: Vec<geo_types::Coord<T>> = match manager.get(remove_idx) {

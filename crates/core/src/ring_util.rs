@@ -752,7 +752,7 @@ pub fn add_local_minimum_point<T: CoordNum + Copy>(
 ///
 /// # Returns
 /// True if ring1 is a descendant of ring2
-fn ring1_child_below_ring2<T: CoordNum>(
+pub fn ring1_child_below_ring2<T: CoordNum>(
     ring1_idx: usize,
     ring2_idx: usize,
     rings: &RingManager<T>,
@@ -786,7 +786,7 @@ fn ring1_child_below_ring2<T: CoordNum>(
 ///
 /// # Returns
 /// Index of the "lower most" ring, or ring1_idx if they're equal
-fn get_lower_most_ring<T: CoordNum>(
+pub fn get_lower_most_ring<T: CoordNum>(
     ring1_idx: usize,
     ring2_idx: usize,
     rings: &RingManager<T>,

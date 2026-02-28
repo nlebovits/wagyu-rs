@@ -460,6 +460,17 @@ fn build_polygon<T: CoordNum + Copy>(
     let mut holes = Vec::new();
     for &hole_index in exterior_ring.children() {
         if let Some(hole_ring) = manager.get(hole_index) {
+            // Skip empty rings - these are artifacts from ring merging
+            // PORT NOTE: C++ linked lists don't have this issue, but Rust Vec-based
+            // rings can end up empty after merge operations
+            if hole_ring.points().is_empty() {
+                // Still process grandchildren even if hole is empty
+                for &grandchild_index in hole_ring.children() {
+                    grandchildren.push(grandchild_index);
+                }
+                continue;
+            }
+
             // PORT FROM: C++ build_result.hpp - holes use same reverse_output flag as exterior
             // The ring already has correct CW winding from correct_orientations
             holes.push(ring_to_linestring(hole_ring, reverse_output));

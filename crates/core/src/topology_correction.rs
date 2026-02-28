@@ -612,18 +612,39 @@ impl BBoxF64 {
 /// - Interior rings (is_hole = true) have negative area (CW)
 ///
 /// Rings with fewer than 3 points are considered degenerate.
+/// Compute the depth of a ring (number of parent hops to reach root).
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring.hpp - ring_depth (lines 405-415)
+fn ring_depth<T: CoordNum>(
+    manager: &crate::build_result::RingManager<T>,
+    ring_idx: usize,
+) -> usize {
+    let mut depth = 0;
+    let mut current = ring_idx;
+    loop {
+        match manager.get(current).and_then(|r| r.parent()) {
+            Some(parent) => {
+                depth += 1;
+                current = parent;
+            }
+            None => break,
+        }
+    }
+    depth
+}
+
 fn correct_orientations<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManager<T>) {
     use crate::ring_util::ring_area;
 
     let indices: Vec<usize> = manager.ring_indices().collect();
 
     for idx in indices {
-        let (ring_len, area, is_hole) = {
+        let (ring_len, area) = {
             let ring = match manager.get(idx) {
                 Some(r) => r,
                 None => continue,
             };
-            (ring.len(), ring_area(ring.points()), ring.is_hole())
+            (ring.len(), ring_area(ring.points()))
         };
 
         // Skip degenerate rings (less than 3 points)
@@ -631,12 +652,25 @@ fn correct_orientations<T: CoordNum + Copy>(manager: &mut crate::build_result::R
             continue;
         }
 
-        let needs_reversal = needs_orientation_reversal(area, is_hole);
+        // PORT FROM: C++ correct_orientations (topology_correction.hpp lines 163-178)
+        // Compare depth-based hole status with area-based hole status
+        // ring_is_hole: depth-based (odd depth = hole) - from Vatti structure
+        // area_is_hole: area-based (negative area = CW = hole) - from geometry
+        let depth = ring_depth(manager, idx);
+        let ring_is_hole = (depth & 1) == 1; // odd depth = hole
+        let area_is_hole = area < 0.0; // negative area = CW = hole
 
-        // Check if orientation needs correction
-        if needs_reversal {
+        // If they disagree, reverse the ring to make area match depth-based determination
+        if ring_is_hole != area_is_hole {
             if let Some(ring) = manager.get_mut(idx) {
                 reverse_ring(ring.points_mut());
+                // PORT FROM: C++ recalculate_stats() - update stored is_hole flag
+                ring.set_hole(ring_is_hole);
+            }
+        } else {
+            // Ensure stored flag matches computed value
+            if let Some(ring) = manager.get_mut(idx) {
+                ring.set_hole(ring_is_hole);
             }
         }
     }
