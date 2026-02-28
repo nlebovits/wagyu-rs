@@ -633,13 +633,6 @@ fn correct_orientations<T: CoordNum + Copy>(manager: &mut crate::build_result::R
 
         let needs_reversal = needs_orientation_reversal(area, is_hole);
 
-        if std::env::var("WAGYU_DEBUG").is_ok() {
-            eprintln!(
-                "DEBUG: correct_orientations ring {} area={:.2} is_hole={} needs_reversal={}",
-                idx, area, is_hole, needs_reversal
-            );
-        }
-
         // Check if orientation needs correction
         if needs_reversal {
             if let Some(ring) = manager.get_mut(idx) {
@@ -682,13 +675,6 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
 
     // Sort by absolute area, largest first
     ring_data.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap());
-
-    if std::env::var("WAGYU_DEBUG").is_ok() {
-        eprintln!("DEBUG: correct_tree - ring_data after sort:");
-        for (idx, area, _, is_hole) in &ring_data {
-            eprintln!("DEBUG:   ring {} area={:.2} is_hole={}", idx, area, is_hole);
-        }
-    }
 
     // Clear existing parent/child relationships
     for (idx, _, _, _) in &ring_data {
