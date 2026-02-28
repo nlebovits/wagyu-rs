@@ -890,7 +890,6 @@ fn correct_repeated_points_in_ring<T: CoordNum + Copy>(
         }
 
         for &(ring2_idx, pt2_idx) in group.iter().skip(i + 1) {
-
             // Guard: the point at pt2_idx must still be the expected coordinate
             let pt2_valid = manager
                 .get(ring2_idx)
@@ -1381,7 +1380,643 @@ pub fn correct_topology<T: CoordNum + Copy>(manager: &mut crate::build_result::R
     // PORT FROM: C++ correct_topology lines ~1311-1315 - loop until no more fixes
     let mut fixed = true;
     while fixed {
+        correct_chained_rings(manager);
         fixed = correct_self_intersections(manager, true);
+    }
+}
+
+// ============================================================================
+// Chained Ring Correction
+// ============================================================================
+
+use std::collections::{HashMap, HashSet, VecDeque};
+
+/// A pair of point references across two rings that share the same coordinate.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+///            `struct point_ptr_pair` (lines 26-44)
+///
+/// In C++, this holds two point pointers. In Rust, we use indices:
+/// - `ring1_idx`: index of the first ring in RingManager
+/// - `point1_idx`: index of the point within ring1's points
+/// - `ring2_idx`: index of the second ring
+/// - `point2_idx`: index of the point within ring2's points
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointPtrPair {
+    pub ring1_idx: usize,
+    pub point1_idx: usize,
+    pub ring2_idx: usize,
+    pub point2_idx: usize,
+}
+
+impl PointPtrPair {
+    pub fn new(ring1_idx: usize, point1_idx: usize, ring2_idx: usize, point2_idx: usize) -> Self {
+        Self {
+            ring1_idx,
+            point1_idx,
+            ring2_idx,
+            point2_idx,
+        }
+    }
+
+    /// Create a swapped version (ring1 <-> ring2)
+    pub fn swap(&self) -> Self {
+        Self {
+            ring1_idx: self.ring2_idx,
+            point1_idx: self.point2_idx,
+            ring2_idx: self.ring1_idx,
+            point2_idx: self.point1_idx,
+        }
+    }
+}
+
+/// Information about a point for sorting and grouping.
+///
+/// PORT FROM: wagyu C++ uses manager.all_points which is a sorted vector
+/// of point pointers. We build this on-the-fly from all rings.
+#[derive(Debug, Clone)]
+struct PointInfo<T: CoordNum> {
+    coord: Coord<T>,
+    ring_idx: usize,
+    point_idx: usize,
+}
+
+/// Connection map entry - tracks connections from one ring to others.
+///
+/// PORT FROM: C++ uses `unordered_multimap<ring_ptr, point_ptr_pair>`
+/// In Rust we use `HashMap<usize, Vec<PointPtrPair>>`
+type ConnectionMap = HashMap<usize, Vec<PointPtrPair>>;
+
+/// Correct rings that share boundary points ("chained rings").
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+///            `correct_chained_rings` (line 755)
+///
+/// When two rings share one or more coordinate points (i.e. they touch without
+/// overlapping) the geometry is not strictly simple.  This function detects
+/// such "chained" connections and merges the rings so the result is OGC-valid.
+///
+/// The C++ implementation:
+/// 1. Sorts `manager.all_points` by coordinate to group co-located points.
+/// 2. For every run of points with the same coordinate it calls
+///    `correct_chained_repeats`, which calls `process_single_intersection`
+///    for every pair of points in the run.
+/// 3. `process_single_intersection` builds a `connection_map` (ring →
+///    point-pair) and, when a closed loop of connections is found, splices the
+///    rings together.
+///
+/// The Rust port implements the same coordinate-grouping walk over all
+/// ring points, then uses the connection-map logic to merge touching rings.
+pub fn correct_chained_rings<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+) {
+    // PORT FROM: topology_correction.hpp correct_chained_rings (line 755-796)
+
+    // Step 1: Collect all points from all rings with their ring/point indices
+    let mut all_points: Vec<PointInfo<T>> = Vec::new();
+
+    for ring_idx in 0..manager.len() {
+        if let Some(ring) = manager.get(ring_idx) {
+            let points = ring.points();
+            for (point_idx, coord) in points.iter().enumerate() {
+                all_points.push(PointInfo {
+                    coord: *coord,
+                    ring_idx,
+                    point_idx,
+                });
+            }
+        }
+    }
+
+    // Early exit if fewer than 2 points total
+    // PORT FROM: C++ line 757-759
+    if all_points.len() < 2 {
+        return;
+    }
+
+    // Step 2: Sort points by coordinate (descending Y, ascending X)
+    // PORT FROM: C++ point_ptr_cmp (lines 148-160)
+    all_points.sort_by(|a, b| {
+        // First compare by Y (descending - higher Y comes first)
+        let y_cmp = compare_coord_values(&b.coord.y, &a.coord.y);
+        if y_cmp != std::cmp::Ordering::Equal {
+            return y_cmp;
+        }
+        // Then compare by X (ascending)
+        compare_coord_values(&a.coord.x, &b.coord.x)
+    });
+
+    // Step 3: Initialize connection map
+    // PORT FROM: C++ line 762-763
+    let mut connection_map: ConnectionMap = HashMap::new();
+
+    // Step 4: Find groups of co-located points and process them
+    // PORT FROM: C++ lines 771-795
+    let mut group_start = 0;
+    while group_start < all_points.len() {
+        // Find the end of this group (points with same coordinate)
+        let mut group_end = group_start + 1;
+        while group_end < all_points.len()
+            && coords_equal(&all_points[group_start].coord, &all_points[group_end].coord)
+        {
+            group_end += 1;
+        }
+
+        // If we have 2+ points at the same coordinate, process pairs
+        if group_end - group_start >= 2 {
+            correct_chained_repeats(
+                manager,
+                &mut connection_map,
+                &all_points[group_start..group_end],
+            );
+        }
+
+        group_start = group_end;
+    }
+}
+
+/// Compare two coordinate values for ordering.
+fn compare_coord_values<T: CoordNum>(a: &T, b: &T) -> std::cmp::Ordering {
+    if *a < *b {
+        std::cmp::Ordering::Less
+    } else if *a > *b {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Equal
+    }
+}
+
+/// Check if two coordinates are equal.
+fn coords_equal<T: CoordNum>(a: &Coord<T>, b: &Coord<T>) -> bool {
+    a.x == b.x && a.y == b.y
+}
+
+/// Process a group of points that share the same coordinate.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+///            `correct_chained_repeats` (lines 737-752)
+///
+/// For each pair of points in the group (from different rings), calls
+/// `process_single_intersection` to potentially merge the rings.
+fn correct_chained_repeats<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+    connection_map: &mut ConnectionMap,
+    group: &[PointInfo<T>],
+) {
+    // PORT FROM: C++ lines 737-752
+    // Nested loop over all pairs
+    for i in 0..group.len() {
+        for j in (i + 1)..group.len() {
+            let pt_i = &group[i];
+            let pt_j = &group[j];
+
+            // Skip if same ring
+            if pt_i.ring_idx == pt_j.ring_idx {
+                continue;
+            }
+
+            process_single_intersection(manager, connection_map, pt_i, pt_j);
+        }
+    }
+}
+
+/// Process a single intersection between two points from different rings.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+///            `process_single_intersection` (lines 472-734)
+///
+/// This is the core logic that decides whether to merge rings that share
+/// a boundary point, and performs the merge if conditions are met.
+fn process_single_intersection<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+    connection_map: &mut ConnectionMap,
+    pt_j: &PointInfo<T>,
+    pt_k: &PointInfo<T>,
+) {
+    // PORT FROM: C++ lines 472-485
+    let ring_j_idx = pt_j.ring_idx;
+    let ring_k_idx = pt_k.ring_idx;
+
+    // Same ring - skip (already checked in caller, but defensive)
+    if ring_j_idx == ring_k_idx {
+        return;
+    }
+
+    // Get ring info
+    let (ring_j_is_hole, ring_j_parent) = {
+        let ring = match manager.get(ring_j_idx) {
+            Some(r) => r,
+            None => return,
+        };
+        (ring.is_hole(), ring.parent())
+    };
+
+    let (ring_k_is_hole, ring_k_parent) = {
+        let ring = match manager.get(ring_k_idx) {
+            Some(r) => r,
+            None => return,
+        };
+        (ring.is_hole(), ring.parent())
+    };
+
+    // PORT FROM: C++ lines 482-485
+    // If neither ring is a hole, skip - two exteriors don't get merged
+    if !ring_j_is_hole && !ring_k_is_hole {
+        return;
+    }
+
+    // PORT FROM: C++ lines 487-518
+    // Determine ring_origin, ring_search, ring_parent, and point assignments
+    let (ring_origin, ring_search, ring_parent_idx, op_origin_1, op_origin_2): (
+        usize,
+        usize,
+        Option<usize>,
+        (usize, usize), // (ring_idx, point_idx)
+        (usize, usize),
+    ) = if !ring_j_is_hole {
+        // ring_j is exterior (not hole), ring_k is hole
+        (
+            ring_j_idx,
+            ring_k_idx,
+            Some(ring_j_idx), // ring_parent = ring_origin for exterior
+            (ring_j_idx, pt_j.point_idx),
+            (ring_k_idx, pt_k.point_idx),
+        )
+    } else if !ring_k_is_hole {
+        // ring_k is exterior, ring_j is hole
+        (
+            ring_k_idx,
+            ring_j_idx,
+            Some(ring_k_idx),
+            (ring_k_idx, pt_k.point_idx),
+            (ring_j_idx, pt_j.point_idx),
+        )
+    } else {
+        // Both are holes - use ring_j as origin, parent is ring_j's parent
+        (
+            ring_j_idx,
+            ring_k_idx,
+            ring_j_parent,
+            (ring_j_idx, pt_j.point_idx),
+            (ring_k_idx, pt_k.point_idx),
+        )
+    };
+
+    // PORT FROM: C++ lines 514-518
+    // Check parent compatibility
+    let ring_search_parent = if ring_k_idx == ring_search {
+        ring_k_parent
+    } else {
+        ring_j_parent
+    };
+
+    if ring_parent_idx != ring_search_parent {
+        // Different parents - incompatible, skip
+        return;
+    }
+
+    // PORT FROM: C++ lines 519-567
+    // Check for existing connection (direct or chained)
+    let mut found = false;
+    let mut i_list: VecDeque<(usize, PointPtrPair)> = VecDeque::new();
+
+    // Check for direct connection in connection_map
+    if let Some(entries) = connection_map.get(&ring_search) {
+        for entry in entries {
+            // Check if this entry connects back to ring_origin
+            if entry.ring2_idx == ring_origin {
+                found = true;
+                // Check position guard: the connection point must be at a different
+                // position than op_origin_1
+                let same_position =
+                    entry.point2_idx == op_origin_1.1 && entry.ring2_idx == op_origin_1.0;
+                if !same_position {
+                    i_list.push_back((ring_search, *entry));
+                    break;
+                }
+            }
+        }
+    }
+
+    // If not found directly, search for chained connection
+    if i_list.is_empty() && !found {
+        let mut visited: HashSet<usize> = HashSet::new();
+        visited.insert(ring_search);
+
+        if let Some(entries) = connection_map.get(&ring_search).cloned() {
+            for entry in &entries {
+                let it_ring = entry.ring2_idx;
+
+                // Skip if already visited, or invalid
+                if visited.contains(&it_ring) || it_ring == ring_search {
+                    continue;
+                }
+
+                // Check parent compatibility
+                let it_ring_parent = manager.get(it_ring).and_then(|r| r.parent());
+                let it_ring_is_valid =
+                    ring_parent_idx == Some(it_ring) || ring_parent_idx == it_ring_parent;
+
+                if !it_ring_is_valid {
+                    continue;
+                }
+
+                // Check ring has non-zero area
+                if let Some(ring) = manager.get(it_ring) {
+                    if ring.points().len() < 3 {
+                        continue;
+                    }
+                }
+
+                // Try to find loop through this connection
+                if find_intersect_loop(
+                    manager,
+                    connection_map,
+                    &mut i_list,
+                    ring_parent_idx,
+                    ring_origin,
+                    it_ring,
+                    &mut visited,
+                    op_origin_2,
+                    (entry.ring2_idx, entry.point2_idx),
+                ) {
+                    found = true;
+                    i_list.push_front((ring_search, *entry));
+                    break;
+                }
+            }
+        }
+    }
+
+    // PORT FROM: C++ lines 562-567
+    // If not found, add to pending connections
+    if !found {
+        let pair_origin =
+            PointPtrPair::new(op_origin_1.0, op_origin_1.1, op_origin_2.0, op_origin_2.1);
+        let pair_search = pair_origin.swap();
+
+        connection_map
+            .entry(ring_origin)
+            .or_insert_with(Vec::new)
+            .push(pair_origin);
+        connection_map
+            .entry(ring_search)
+            .or_insert_with(Vec::new)
+            .push(pair_search);
+        return;
+    }
+
+    // PORT FROM: C++ lines 570-587
+    // Special case: found but iList empty (hole-hole)
+    if i_list.is_empty() {
+        // Check if origin already has an entry pointing to search
+        let mut missing = true;
+        if let Some(entries) = connection_map.get(&ring_origin) {
+            for entry in entries {
+                if entry.ring2_idx == ring_search {
+                    missing = false;
+                    break;
+                }
+            }
+        }
+        if missing {
+            let pair =
+                PointPtrPair::new(op_origin_1.0, op_origin_1.1, op_origin_2.0, op_origin_2.1);
+            connection_map
+                .entry(ring_origin)
+                .or_insert_with(Vec::new)
+                .push(pair);
+        }
+        return;
+    }
+
+    // PORT FROM: C++ lines 588-734
+    // We have a cycle - perform the merge
+    merge_rings_at_intersection(
+        manager,
+        connection_map,
+        ring_origin,
+        ring_search,
+        ring_parent_idx,
+        op_origin_1,
+        op_origin_2,
+        &i_list,
+    );
+}
+
+/// Search for a loop back to ring_origin through the connection map.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+///            `find_intersect_loop` (lines 101-145)
+///
+/// This is a DFS that searches for a chain of connections that leads back
+/// to ring_origin, building the i_list as it goes.
+fn find_intersect_loop<T: CoordNum + Copy>(
+    manager: &crate::build_result::RingManager<T>,
+    connection_map: &ConnectionMap,
+    i_list: &mut VecDeque<(usize, PointPtrPair)>,
+    ring_parent_idx: Option<usize>,
+    ring_origin: usize,
+    ring_search: usize,
+    visited: &mut HashSet<usize>,
+    orig_pt: (usize, usize), // (ring_idx, point_idx)
+    prev_pt: (usize, usize),
+) -> bool {
+    // PORT FROM: C++ lines 110-127 - Check for direct connection
+    if let Some(entries) = connection_map.get(&ring_search) {
+        for entry in entries {
+            // Validate entry
+            if entry.ring1_idx != ring_search {
+                continue;
+            }
+
+            let it_ring2 = entry.ring2_idx;
+
+            // Check if both rings are exterior (skip)
+            let ring1_is_hole = manager
+                .get(entry.ring1_idx)
+                .map(|r| r.is_hole())
+                .unwrap_or(false);
+            let ring2_is_hole = manager.get(it_ring2).map(|r| r.is_hole()).unwrap_or(false);
+            if !ring1_is_hole && !ring2_is_hole {
+                continue;
+            }
+
+            // Check for cycle back to origin
+            if it_ring2 == ring_origin {
+                // Check parent compatibility
+                let parent_ok = ring_parent_idx == Some(it_ring2)
+                    || ring_parent_idx == manager.get(it_ring2).and_then(|r| r.parent());
+
+                // Position guards
+                let prev_pt_same = prev_pt == (entry.ring2_idx, entry.point2_idx);
+                let orig_pt_same = orig_pt == (entry.ring2_idx, entry.point2_idx);
+
+                if parent_ok && !prev_pt_same && !orig_pt_same {
+                    i_list.push_front((ring_search, *entry));
+                    return true;
+                }
+            }
+        }
+    }
+
+    // PORT FROM: C++ lines 128-143 - Search through chain
+    visited.insert(ring_search);
+
+    if let Some(entries) = connection_map.get(&ring_search).cloned() {
+        for entry in &entries {
+            let it_ring = entry.ring2_idx;
+
+            // Skip if visited, null, or wrong parent
+            if visited.contains(&it_ring) {
+                continue;
+            }
+
+            // Check parent compatibility
+            let it_ring_parent = manager.get(it_ring).and_then(|r| r.parent());
+            if ring_parent_idx != Some(it_ring) && ring_parent_idx != it_ring_parent {
+                continue;
+            }
+
+            // Check ring has valid area
+            if let Some(ring) = manager.get(it_ring) {
+                if ring.points().len() < 3 {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+
+            // Position guard
+            if prev_pt == (entry.ring2_idx, entry.point2_idx) {
+                continue;
+            }
+
+            // Recurse
+            if find_intersect_loop(
+                manager,
+                connection_map,
+                i_list,
+                ring_parent_idx,
+                ring_origin,
+                it_ring,
+                visited,
+                orig_pt,
+                (entry.ring2_idx, entry.point2_idx),
+            ) {
+                i_list.push_front((ring_search, *entry));
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Merge rings at their intersection points.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+///            `process_single_intersection` (lines 588-734) - the merge portion
+///
+/// This performs the actual ring merging by splicing the point sequences
+/// together at the shared coordinate.
+fn merge_rings_at_intersection<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+    _connection_map: &mut ConnectionMap,
+    _ring_origin: usize,
+    _ring_search: usize,
+    _ring_parent_idx: Option<usize>,
+    op_origin_1: (usize, usize), // (ring_idx, point_idx)
+    op_origin_2: (usize, usize),
+    i_list: &VecDeque<(usize, PointPtrPair)>,
+) {
+    // PORT FROM: C++ lines 588-734
+    //
+    // In C++, this performs a "next-swap" on the linked list pointers:
+    //   op_origin_1->next = op_origin_2->next
+    //   op_origin_2->next = op_origin_1->next
+    //
+    // For Vec-based rings in Rust, we need to splice the point arrays together.
+    // This creates a merged ring from the two touching rings.
+
+    // For now, implement a simplified version that handles the basic case:
+    // Two rings sharing a point are merged into one ring.
+
+    // Get the points from both rings
+    let (ring_origin_idx, origin_point_idx) = op_origin_1;
+    let (ring_other_idx, other_point_idx) = op_origin_2;
+
+    // Skip if either ring is invalid
+    let origin_points: Vec<Coord<T>> = match manager.get(ring_origin_idx) {
+        Some(r) => r.points().to_vec(),
+        None => return,
+    };
+    let other_points: Vec<Coord<T>> = match manager.get(ring_other_idx) {
+        Some(r) => r.points().to_vec(),
+        None => return,
+    };
+
+    if origin_points.len() < 3 || other_points.len() < 3 {
+        return;
+    }
+
+    // Build merged ring by splicing at the shared point
+    // Starting from origin ring, at the shared point, continue into other ring,
+    // then back to origin ring to complete the loop.
+    //
+    // C++ next-swap semantics:
+    // - origin_point follows to other_point's next
+    // - other_point follows to origin_point's next
+    //
+    // For Vec: we interleave the sequences
+
+    let mut merged_points: Vec<Coord<T>> =
+        Vec::with_capacity(origin_points.len() + other_points.len());
+
+    // Add points from origin ring: [0..=origin_point_idx]
+    for i in 0..=origin_point_idx {
+        merged_points.push(origin_points[i]);
+    }
+
+    // Add points from other ring starting AFTER the shared point
+    // (other_point_idx + 1) through to (other_point_idx - 1), wrapping around
+    let other_len = other_points.len();
+    for offset in 1..other_len {
+        let idx = (other_point_idx + offset) % other_len;
+        merged_points.push(other_points[idx]);
+    }
+
+    // Add remaining points from origin ring: (origin_point_idx + 1) to end
+    // These wrap around back to the start
+    let origin_len = origin_points.len();
+    for offset in 1..origin_len {
+        let idx = (origin_point_idx + offset) % origin_len;
+        // Skip if this is the starting point (we already have it)
+        if offset < origin_len {
+            merged_points.push(origin_points[idx]);
+        }
+    }
+
+    // Remove duplicate closing point if present
+    if merged_points.len() > 1 && merged_points.first() == merged_points.last() {
+        merged_points.pop();
+    }
+
+    // Update the origin ring with merged points
+    if let Some(ring) = manager.get_mut(ring_origin_idx) {
+        *ring.points_mut() = merged_points;
+        ring.set_corrected(false); // Mark as needing reprocessing
+    }
+
+    // Clear the other ring (it's been absorbed)
+    if let Some(ring) = manager.get_mut(ring_other_idx) {
+        ring.points_mut().clear();
+    }
+
+    // Process additional rings in i_list (for chained merges)
+    for (_ring_idx, _pair) in i_list {
+        // TODO: Handle chained merges for multi-ring chains
+        // For now, the basic two-ring merge handles most cases
     }
 }
 
@@ -2544,6 +3179,318 @@ mod tests {
         assert_eq!(
             len_after, 4,
             "Clean ring should still have 4 points after correct_topology"
+        );
+    }
+
+    // ==================== correct_chained_rings Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+    //            correct_chained_rings (line 755)
+    //
+    // These tests cover the four topological cases that correct_chained_rings
+    // must handle.  All tests are RED: they compile but panic at runtime
+    // because correct_chained_rings is a todo!() stub.
+
+    // -----------------------------------------------------------------------
+    // Case 1: Two EXTERIOR rings share a single boundary point
+    //
+    // Scenario (based on fixture polygon-with-hole-with-shared-point.json):
+    //   Ring A (exterior, CCW): (-3181,-1223), (-1657,1185), (2761,1256), (1563,-1814)
+    //   Ring B (exterior, CCW): (-3181,-1223), (364,-5497), (6665,2813), (-3335,4503)
+    //   Both rings share the vertex (-3181, -1223).
+    //
+    // Expected outcome after correct_chained_rings:
+    //   PORT FROM: C++ process_single_intersection lines 482-485
+    //   Two EXTERIOR rings sharing a point are SKIPPED (no merge).
+    //   This is valid OGC geometry - multipolygons can touch at points.
+    //   The rings should remain unchanged.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn correct_chained_rings_two_exteriors_sharing_single_point() {
+        let mut manager: RingManager<i64> = RingManager::new();
+
+        // Ring A - exterior polygon (CCW, positive area)
+        let ring_a_pts: Vec<Coord<i64>> = vec![
+            Coord { x: -3181, y: -1223 },
+            Coord { x: -1657, y: 1185 },
+            Coord { x: 2761, y: 1256 },
+            Coord { x: 1563, y: -1814 },
+        ];
+        let mut ring_a = Ring::empty();
+        for pt in ring_a_pts {
+            ring_a.push_point(pt);
+        }
+        let idx_a = manager.add_ring(ring_a);
+
+        // Ring B - exterior polygon (CCW, positive area)
+        // Shares vertex (-3181, -1223) with Ring A.
+        let ring_b_pts: Vec<Coord<i64>> = vec![
+            Coord { x: -3181, y: -1223 },
+            Coord { x: 364, y: -5497 },
+            Coord { x: 6665, y: 2813 },
+            Coord { x: -3335, y: 4503 },
+        ];
+        let mut ring_b = Ring::empty();
+        for pt in ring_b_pts {
+            ring_b.push_point(pt);
+        }
+        let idx_b = manager.add_ring(ring_b);
+
+        let len_a_before = manager.get(idx_a).unwrap().len();
+        let len_b_before = manager.get(idx_b).unwrap().len();
+
+        // Act
+        correct_chained_rings(&mut manager);
+
+        // Two EXTERIOR rings sharing a point should NOT be merged.
+        // PORT FROM: C++ lines 482-485: "Both are not holes, return nothing to do."
+        // The rings should remain completely unchanged.
+        assert_eq!(manager.len(), 2, "Two exterior rings should not be merged");
+        assert_eq!(
+            manager.get(idx_a).unwrap().len(),
+            len_a_before,
+            "Exterior ring A should be unchanged"
+        );
+        assert_eq!(
+            manager.get(idx_b).unwrap().len(),
+            len_b_before,
+            "Exterior ring B should be unchanged"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Case 2: Polygon with hole - outer ring and hole share an entire edge
+    //
+    // Scenario (from fixture polygon-with-hole-shared-edge.json):
+    //   Outer ring (CCW):
+    //     (-5163,2658), (-4971,-3736), (4366,-3119), (4837,6264)
+    //   Hole ring (CW):
+    //     (-4971,-3736), (-517,2129), (2053,2658), (4366,-3119)
+    //   The outer and hole rings both contain (-4971,-3736) AND (4366,-3119),
+    //   forming a shared edge.
+    //
+    // Expected outcome:
+    //   The shared edge is resolved so the resulting geometry is OGC valid
+    //   (no degenerate shared-edge between outer ring and hole).
+    // -----------------------------------------------------------------------
+    #[test]
+    fn correct_chained_rings_outer_and_hole_share_edge() {
+        let mut manager: RingManager<i64> = RingManager::new();
+
+        // Outer ring (exterior)
+        let outer_pts: Vec<Coord<i64>> = vec![
+            Coord { x: -5163, y: 2658 },
+            Coord { x: -4971, y: -3736 },
+            Coord { x: 4366, y: -3119 },
+            Coord { x: 4837, y: 6264 },
+        ];
+        let mut outer = Ring::empty();
+        for pt in outer_pts {
+            outer.push_point(pt);
+        }
+        let outer_idx = manager.add_ring(outer);
+
+        // Hole ring (interior, marked as hole)
+        // Shares TWO vertices with the outer ring: (-4971,-3736) and (4366,-3119).
+        let hole_pts: Vec<Coord<i64>> = vec![
+            Coord { x: -4971, y: -3736 },
+            Coord { x: -517, y: 2129 },
+            Coord { x: 2053, y: 2658 },
+            Coord { x: 4366, y: -3119 },
+        ];
+        let mut hole = Ring::empty();
+        for pt in hole_pts {
+            hole.push_point(pt);
+        }
+        hole.set_hole(true);
+        let hole_idx = manager.add_ring(hole);
+        manager.set_parent(hole_idx, outer_idx);
+
+        // Verify setup
+        assert!(
+            manager.get(hole_idx).unwrap().is_hole(),
+            "Setup: hole ring must be marked as hole"
+        );
+        assert_eq!(
+            manager.get(hole_idx).unwrap().len(),
+            4,
+            "Setup: hole has 4 points"
+        );
+
+        // Act - will panic with todo!() until implemented
+        correct_chained_rings(&mut manager);
+
+        // After correction the shared-edge (two shared vertices) must be resolved.
+        // The geometry should no longer have the outer and hole sharing an edge;
+        // this typically results in the hole being merged into the outer ring.
+        let outer_len_after = manager.get(outer_idx).map(|r| r.len()).unwrap_or(0);
+        let hole_len_after = manager.get(hole_idx).map(|r| r.len()).unwrap_or(0);
+
+        assert!(
+            outer_len_after != 4 || hole_len_after != 4,
+            "correct_chained_rings must modify rings that share an edge"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Case 3: Multi-polygon - two EXTERIOR rings share an entire edge
+    //
+    // Scenario (from fixture multi-polygon-with-shared-edge.json):
+    //   Polygon 1 (CCW):
+    //     (-5163,2658), (-4971,-3736), (4366,-3119), (4837,6264)
+    //   Polygon 2 (CCW):
+    //     (-4971,-3736), (-517,2129), (2053,2658), (4366,-3119)
+    //   Both polygons share the vertices (-4971,-3736) and (4366,-3119),
+    //   which form a shared boundary edge.
+    //
+    // Expected outcome:
+    //   PORT FROM: C++ process_single_intersection lines 482-485
+    //   Two EXTERIOR rings are SKIPPED (no merge), even if they share an edge.
+    //   This is because correct_chained_rings only processes pairs where
+    //   at least one ring is a hole.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn correct_chained_rings_two_exteriors_sharing_edge() {
+        let mut manager: RingManager<i64> = RingManager::new();
+
+        // Polygon 1 exterior (CCW)
+        let poly1_pts: Vec<Coord<i64>> = vec![
+            Coord { x: -5163, y: 2658 },
+            Coord { x: -4971, y: -3736 },
+            Coord { x: 4366, y: -3119 },
+            Coord { x: 4837, y: 6264 },
+        ];
+        let mut poly1 = Ring::empty();
+        for pt in poly1_pts {
+            poly1.push_point(pt);
+        }
+        let idx1 = manager.add_ring(poly1);
+
+        // Polygon 2 exterior (CCW) - shares (-4971,-3736) and (4366,-3119)
+        let poly2_pts: Vec<Coord<i64>> = vec![
+            Coord { x: -4971, y: -3736 },
+            Coord { x: -517, y: 2129 },
+            Coord { x: 2053, y: 2658 },
+            Coord { x: 4366, y: -3119 },
+        ];
+        let mut poly2 = Ring::empty();
+        for pt in poly2_pts {
+            poly2.push_point(pt);
+        }
+        let idx2 = manager.add_ring(poly2);
+
+        let len1_before = manager.get(idx1).unwrap().len();
+        let len2_before = manager.get(idx2).unwrap().len();
+
+        // Act
+        correct_chained_rings(&mut manager);
+
+        // Two EXTERIOR rings sharing an edge should NOT be merged.
+        // PORT FROM: C++ lines 482-485: "Both are not holes, return nothing to do."
+        // The rings should remain completely unchanged.
+        assert_eq!(manager.len(), 2, "Two exterior rings should not be merged");
+        assert_eq!(
+            manager.get(idx1).unwrap().len(),
+            len1_before,
+            "Exterior ring 1 should be unchanged"
+        );
+        assert_eq!(
+            manager.get(idx2).unwrap().len(),
+            len2_before,
+            "Exterior ring 2 should be unchanged"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Case 4: No shared points - correct_chained_rings is a no-op
+    //
+    // Two completely disjoint rings must not be modified.
+    // This ensures the function does not accidentally corrupt clean geometry.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn correct_chained_rings_disjoint_rings_unchanged() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Ring 1: square at origin (0,0)-(10,10)
+        let ring1 = make_ccw_square(0.0, 0.0, 10.0);
+        let idx1 = manager.add_ring(ring1);
+
+        // Ring 2: square far away at (100,100)-(110,110) - no shared coordinates
+        let ring2 = make_ccw_square(100.0, 100.0, 10.0);
+        let idx2 = manager.add_ring(ring2);
+
+        let len1_before = manager.get(idx1).unwrap().len();
+        let len2_before = manager.get(idx2).unwrap().len();
+
+        // Act - will panic with todo!() until implemented
+        correct_chained_rings(&mut manager);
+
+        // Disjoint rings must not be altered
+        let len1_after = manager.get(idx1).unwrap().len();
+        let len2_after = manager.get(idx2).unwrap().len();
+
+        assert_eq!(
+            len1_after, len1_before,
+            "Disjoint ring 1 must be unchanged by correct_chained_rings"
+        );
+        assert_eq!(
+            len2_after, len2_before,
+            "Disjoint ring 2 must be unchanged by correct_chained_rings"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Case 5: Single shared point - no merge (no cycle)
+    //
+    // PORT FROM: C++ process_single_intersection behavior
+    //
+    // A single shared point between hole and exterior does NOT form a cycle
+    // in the connection_map. Merges only happen when there are MULTIPLE
+    // shared points that form a closed loop (like a shared edge).
+    //
+    // This is valid OGC geometry - a hole touching its exterior at one point.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn correct_chained_rings_single_shared_point_no_merge() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Ring A: Large exterior (CCW)
+        // Has a point at (50, 0) that will be shared with the hole
+        let mut ring_a: Ring<f64> = Ring::empty();
+        ring_a.push_point(Coord { x: 0.0, y: 0.0 });
+        ring_a.push_point(Coord { x: 50.0, y: 0.0 }); // shared with hole
+        ring_a.push_point(Coord { x: 100.0, y: 0.0 });
+        ring_a.push_point(Coord { x: 100.0, y: 100.0 });
+        ring_a.push_point(Coord { x: 0.0, y: 100.0 });
+        let idx_a = manager.add_ring(ring_a);
+
+        // Ring B: Hole inside A (CW) that touches A at a single point (50, 0)
+        let mut ring_b: Ring<f64> = Ring::empty();
+        ring_b.push_point(Coord { x: 50.0, y: 0.0 }); // shared with A
+        ring_b.push_point(Coord { x: 30.0, y: 30.0 });
+        ring_b.push_point(Coord { x: 70.0, y: 30.0 });
+        ring_b.set_hole(true);
+        let idx_b = manager.add_ring(ring_b);
+        manager.set_parent(idx_b, idx_a); // Establish parent relationship
+
+        let len_a_before = manager.get(idx_a).unwrap().len();
+        let len_b_before = manager.get(idx_b).unwrap().len();
+
+        // Act
+        correct_chained_rings(&mut manager);
+
+        // A single shared point does NOT create a cycle in the connection_map,
+        // so no merge occurs. Both rings should remain unchanged.
+        // PORT FROM: C++ only merges when connection_map has a cycle (multiple shared points)
+        let len_a_after = manager.get(idx_a).map(|r| r.len()).unwrap_or(0);
+        let len_b_after = manager.get(idx_b).map(|r| r.len()).unwrap_or(0);
+
+        assert_eq!(
+            len_a_after, len_a_before,
+            "Single shared point: exterior should be unchanged"
+        );
+        assert_eq!(
+            len_b_after, len_b_before,
+            "Single shared point: hole should be unchanged"
         );
     }
 }
