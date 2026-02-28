@@ -21,6 +21,19 @@ use crate::intersect::{IntersectList, IntersectNode};
 use crate::point::Point;
 use crate::Operation;
 
+/// Result of processing a bound intersection.
+///
+/// Provides information needed by the caller to update state after intersection.
+#[derive(Debug, Clone, Copy)]
+pub enum IntersectResult {
+    /// No special action needed
+    None,
+    /// Rings were merged: (kept_ring_idx, removed_ring_idx, keep_side)
+    Merged(usize, usize, EdgeSide),
+    /// A new ring was created at this intersection
+    NewRing(usize),
+}
+
 // ============================================================================
 // Helper functions
 // ============================================================================
@@ -547,12 +560,14 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
 ///
 /// When two non-contributing bounds of different polygon types intersect
 /// in a way that starts output, this creates a new ring.
+///
+/// Returns the index of the newly created ring so the caller can set hole state.
 fn add_local_minimum_point_at_intersection<T: CoordNum>(
     b1: &mut Bound<T>,
     b2: &mut Bound<T>,
     pt: Point<T>,
     manager: &mut RingManager<T>,
-) {
+) -> usize {
     // Create a new ring and add the point
     let ring = crate::Ring::new(vec![geo_types::Coord { x: pt.x, y: pt.y }]);
     let ring_idx = manager.add_ring(ring);
@@ -578,6 +593,8 @@ fn add_local_minimum_point_at_intersection<T: CoordNum>(
         b2.side = EdgeSide::Left;
         b2.last_point = pt;
     }
+
+    ring_idx
 }
 
 /// Process an intersection between two bounds.
@@ -597,8 +614,10 @@ fn add_local_minimum_point_at_intersection<T: CoordNum>(
 /// * `manager` - Ring manager for output
 ///
 /// # Returns
-/// If rings were merged, returns `Some((kept_ring_idx, removed_ring_idx, keep_side))`
-/// so the caller can update other bounds that reference the removed ring.
+/// `IntersectResult` indicating what happened:
+/// - `None`: No special action needed
+/// - `Merged`: Rings were merged, caller should update other bounds
+/// - `NewRing`: A new ring was created, caller should set hole state
 pub fn intersect_bounds<T: CoordNum>(
     b1: &mut Bound<T>,
     b2: &mut Bound<T>,
@@ -607,7 +626,7 @@ pub fn intersect_bounds<T: CoordNum>(
     subject_fill_type: FillType,
     clip_fill_type: FillType,
     manager: &mut RingManager<T>,
-) -> Option<(usize, usize, EdgeSide)> {
+) -> IntersectResult {
     // Update winding counts
     update_winding_counts(b1, b2, subject_fill_type, clip_fill_type);
 
@@ -635,7 +654,12 @@ pub fn intersect_bounds<T: CoordNum>(
 
         if unusual_winding || different_poly_types_not_xor {
             // Add local maximum point - rings meet and close/merge
-            return add_local_maximum_point_at_intersection(b1, b2, pt, manager);
+            if let Some((keep, remove, side)) =
+                add_local_maximum_point_at_intersection(b1, b2, pt, manager)
+            {
+                return IntersectResult::Merged(keep, remove, side);
+            }
+            return IntersectResult::None;
         } else {
             // Add point to both rings before swapping
             add_point(b1, pt, manager);
@@ -672,7 +696,8 @@ pub fn intersect_bounds<T: CoordNum>(
         // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp lines 217-270
         if b1.poly_type != b2.poly_type {
             // Different polygon types - always add local minimum point
-            add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+            let ring_idx = add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+            return IntersectResult::NewRing(ring_idx);
         } else if b1_wc == 1 && b2_wc == 1 {
             // Same polygon type, both with winding count 1
             // Calculate effective winding_count2 based on fill type
@@ -684,12 +709,14 @@ pub fn intersect_bounds<T: CoordNum>(
             match cliptype {
                 Operation::Intersection => {
                     if b1_wc2 > 0 && b2_wc2 > 0 {
-                        add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                        let ring_idx = add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                        return IntersectResult::NewRing(ring_idx);
                     }
                 }
                 Operation::Union => {
                     if b1_wc2 <= 0 && b2_wc2 <= 0 {
-                        add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                        let ring_idx = add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                        return IntersectResult::NewRing(ring_idx);
                     }
                 }
                 Operation::Difference => {
@@ -699,12 +726,14 @@ pub fn intersect_bounds<T: CoordNum>(
                         PolygonType::Subject => b1_wc2 <= 0 && b2_wc2 <= 0,
                     };
                     if should_add {
-                        add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                        let ring_idx = add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                        return IntersectResult::NewRing(ring_idx);
                     }
                 }
                 Operation::Xor => {
                     // XOR always starts a new ring for same-type bounds at wc=1
-                    add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                    let ring_idx = add_local_minimum_point_at_intersection(b1, b2, pt, manager);
+                    return IntersectResult::NewRing(ring_idx);
                 }
             }
         } else {
@@ -712,7 +741,7 @@ pub fn intersect_bounds<T: CoordNum>(
             swap_sides(b1, b2);
         }
     }
-    None
+    IntersectResult::None
 }
 
 /// Process all intersections in the list.
@@ -742,7 +771,7 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
             // Process intersection
             // Safety: we're using indices from the intersection list which
             // were valid when built
-            let merge_info = {
+            let result = {
                 let (b1, b2) = if idx1 < idx2 {
                     let (left, right) = bounds.split_at_mut(idx2);
                     (&mut left[idx1], &mut right[0])
@@ -762,16 +791,67 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
                 )
             };
 
-            // If rings were merged, update other active bounds that reference the removed ring
-            // PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - append_ring (lines 597-606)
-            if let Some((keep_ring_idx, remove_ring_idx, keep_side)) = merge_info {
-                for &ab_idx in ael.as_slice() {
-                    if bounds[ab_idx].ring == Some(remove_ring_idx) {
-                        bounds[ab_idx].ring = Some(keep_ring_idx);
-                        bounds[ab_idx].side = keep_side;
-                        break; // C++ breaks after first match
+            match result {
+                IntersectResult::Merged(keep_ring_idx, remove_ring_idx, keep_side) => {
+                    // Update other active bounds that reference the removed ring
+                    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - append_ring (lines 597-606)
+                    for &ab_idx in ael.as_slice() {
+                        if bounds[ab_idx].ring == Some(remove_ring_idx) {
+                            bounds[ab_idx].ring = Some(keep_ring_idx);
+                            bounds[ab_idx].side = keep_side;
+                            break; // C++ breaks after first match
+                        }
                     }
                 }
+                IntersectResult::NewRing(ring_idx) => {
+                    // Set hole state for newly created ring
+                    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - set_hole_state (lines 31-57)
+                    //
+                    // Find which bound owns this ring (the one with left side)
+                    let owner_pos = if bounds[idx1].ring == Some(ring_idx)
+                        && bounds[idx1].side == EdgeSide::Left
+                    {
+                        ael.position(idx1)
+                    } else if bounds[idx2].ring == Some(ring_idx)
+                        && bounds[idx2].side == EdgeSide::Left
+                    {
+                        ael.position(idx2)
+                    } else {
+                        // Just use the first one
+                        Some(p1.min(p2))
+                    };
+
+                    if let Some(owner_pos) = owner_pos {
+                        // Look leftward in the AEL to find parent ring
+                        // C++: finds first ring to the left, canceling pairs with same ring
+                        let mut parent_ring: Option<usize> = None;
+                        let mut tmp_ring: Option<usize> = None;
+
+                        for i in (0..owner_pos).rev() {
+                            let ab_idx = ael.as_slice()[i];
+                            if let Some(other_ring) = bounds[ab_idx].ring {
+                                if other_ring == ring_idx {
+                                    continue; // Skip our own ring
+                                }
+                                if tmp_ring.is_none() {
+                                    tmp_ring = Some(other_ring);
+                                } else if tmp_ring == Some(other_ring) {
+                                    tmp_ring = None; // Cancel out paired bounds
+                                }
+                            }
+                        }
+
+                        parent_ring = tmp_ring;
+
+                        if let Some(parent_idx) = parent_ring {
+                            manager.set_parent(ring_idx, parent_idx);
+                            if let Some(ring) = manager.get_mut(ring_idx) {
+                                ring.set_hole(true);
+                            }
+                        }
+                    }
+                }
+                IntersectResult::None => {}
             }
 
             // Swap positions in AEL

@@ -575,6 +575,10 @@ pub fn add_first_point<T: CoordNum + Copy>(
         }
     }
 
+    // C++: bnd.last_point = pt; (line 315)
+    // Track the last point added to this bound
+    bounds[bound_idx].last_point = pt.into();
+
     if std::env::var("WAGYU_DEBUG").is_ok() {
         eprintln!(
             "DEBUG: add_first_point created ring {} with point ({}, {}) parent={:?}",
@@ -691,6 +695,9 @@ pub fn add_point<T: CoordNum + Copy>(
     } else {
         add_point_to_ring(bound_idx, bounds, pt, rings);
     }
+    // C++: insert_hot_pixels_in_path sets bnd.last_point = end_pt (ring_util.hpp:297)
+    // We update last_point here since we don't have hot pixel interpolation yet
+    bounds[bound_idx].last_point = pt.into();
 }
 
 /// Add the initial point at a local minimum, linking two bounds.
@@ -727,6 +734,9 @@ pub fn add_local_minimum_point<T: CoordNum + Copy>(
     if b2_horizontal || b1_dx > b2_dx {
         // b1 owns the ring
         add_point(b1_idx, bounds, active_bounds, pt, rings);
+        // C++: b2.last_point = pt; (line 359)
+        // The non-owning bound must also track the starting point
+        bounds[b2_idx].last_point = pt.into();
         let ring_idx = bounds[b1_idx].ring;
         bounds[b2_idx].ring = ring_idx;
         bounds[b1_idx].side = EdgeSide::Left;
@@ -734,6 +744,9 @@ pub fn add_local_minimum_point<T: CoordNum + Copy>(
     } else {
         // b2 owns the ring
         add_point(b2_idx, bounds, active_bounds, pt, rings);
+        // C++: b1.last_point = pt; (line 365)
+        // The non-owning bound must also track the starting point
+        bounds[b1_idx].last_point = pt.into();
         let ring_idx = bounds[b2_idx].ring;
         bounds[b1_idx].ring = ring_idx;
         bounds[b1_idx].side = EdgeSide::Right;
