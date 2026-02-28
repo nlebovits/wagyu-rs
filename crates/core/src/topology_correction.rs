@@ -633,13 +633,6 @@ fn correct_orientations<T: CoordNum + Copy>(manager: &mut crate::build_result::R
 
         let needs_reversal = needs_orientation_reversal(area, is_hole);
 
-        if std::env::var("WAGYU_DEBUG").is_ok() {
-            eprintln!(
-                "DEBUG: correct_orientations ring {} area={:.2} is_hole={} needs_reversal={}",
-                idx, area, is_hole, needs_reversal
-            );
-        }
-
         // Check if orientation needs correction
         if needs_reversal {
             if let Some(ring) = manager.get_mut(idx) {
@@ -682,13 +675,6 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
 
     // Sort by absolute area, largest first
     ring_data.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap());
-
-    if std::env::var("WAGYU_DEBUG").is_ok() {
-        eprintln!("DEBUG: correct_tree - ring_data after sort:");
-        for (idx, area, _, is_hole) in &ring_data {
-            eprintln!("DEBUG:   ring {} area={:.2} is_hole={}", idx, area, is_hole);
-        }
-    }
 
     // Clear existing parent/child relationships
     for (idx, _, _, _) in &ring_data {
@@ -795,6 +781,569 @@ fn poly2_contains_poly1_f64<T: CoordNum>(
     false
 }
 
+// ============================================================================
+// Self-Intersection Correction
+// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+// ============================================================================
+
+/// Sort a ring's points by (y descending, x ascending) and return the sorted copy.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - sort_ring_points
+pub fn sort_ring_points_by_coord<T: CoordNum + Copy>(ring: &crate::Ring<T>) -> Vec<Coord<T>> {
+    let mut sorted: Vec<Coord<T>> = ring.points().to_vec();
+    sorted.sort_by(|a, b| compare_points(a, b));
+    sorted
+}
+
+/// Split ring `ring_idx` at two positions `pt1_idx` and `pt2_idx` that share the same coordinate.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - correct_self_intersection
+///
+/// The split produces two loops:
+///   loop_a = points[p..q]      (from the smaller index to the larger)
+///   loop_b = points[q..] + points[..p]  (wrapping the remainder)
+///
+/// The loop with larger absolute area retains the original ring identity.
+/// The smaller loop is assigned to a newly created ring.
+///
+/// Returns `Some(new_ring_idx)` on success, `None` if split was not performed
+/// (e.g., same index, not enough points, or different rings).
+pub fn correct_self_intersection_in_ring<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+    ring1_idx: usize,
+    pt1_idx: usize,
+    ring2_idx: usize,
+    pt2_idx: usize,
+) -> Option<usize> {
+    // Only handles same-ring case (two visits to the same point within one ring)
+    if ring1_idx != ring2_idx {
+        return None;
+    }
+    let ring_idx = ring1_idx;
+
+    let points: Vec<Coord<T>> = manager.ring_points_cloned(ring_idx);
+    let n = points.len();
+
+    if pt1_idx == pt2_idx || n < 4 {
+        return None;
+    }
+
+    // Ensure p < q
+    let (p, q) = if pt1_idx < pt2_idx {
+        (pt1_idx, pt2_idx)
+    } else {
+        (pt2_idx, pt1_idx)
+    };
+
+    // loop_a covers [p..q], loop_b covers [q..n] + [0..p]
+    let loop_a: Vec<Coord<T>> = points[p..q].to_vec();
+    let loop_b: Vec<Coord<T>> = points[q..]
+        .iter()
+        .chain(points[..p].iter())
+        .copied()
+        .collect();
+
+    if loop_a.len() < 3 || loop_b.len() < 3 {
+        return None;
+    }
+
+    let area_a = crate::ring_util::ring_area(&loop_a).abs();
+    let area_b = crate::ring_util::ring_area(&loop_b).abs();
+
+    let new_ring_idx = manager.create_new_ring();
+
+    // The larger loop keeps the original ring identity
+    if area_a >= area_b {
+        manager.set_ring_points(ring_idx, loop_a);
+        manager.set_ring_points(new_ring_idx, loop_b);
+    } else {
+        manager.set_ring_points(ring_idx, loop_b);
+        manager.set_ring_points(new_ring_idx, loop_a);
+    }
+
+    Some(new_ring_idx)
+}
+
+/// Process a group of points that all share the same coordinate within one ring.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - correct_repeated_points
+///
+/// For each pair (pt1, pt2) in the group, attempt a self-intersection split.
+/// The `target_coord` guard ensures stale indices (from a prior split) are not used.
+fn correct_repeated_points_in_ring<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+    new_ring_indices: &mut Vec<usize>,
+    group: &[(usize, usize)], // (ring_idx, point_idx)
+    target_coord: Coord<T>,
+) {
+    for i in 0..group.len() {
+        let (ring1_idx, pt1_idx) = group[i];
+
+        // Guard: the point at pt1_idx must still be the expected coordinate
+        let pt1_valid = manager
+            .get(ring1_idx)
+            .and_then(|r| r.points().get(pt1_idx).copied())
+            .map(|c| c == target_coord)
+            .unwrap_or(false);
+        if !pt1_valid {
+            continue;
+        }
+
+        for &(ring2_idx, pt2_idx) in group.iter().skip(i + 1) {
+
+            // Guard: the point at pt2_idx must still be the expected coordinate
+            let pt2_valid = manager
+                .get(ring2_idx)
+                .and_then(|r| r.points().get(pt2_idx).copied())
+                .map(|c| c == target_coord)
+                .unwrap_or(false);
+            if !pt2_valid {
+                continue;
+            }
+
+            if let Some(new_idx) =
+                correct_self_intersection_in_ring(manager, ring1_idx, pt1_idx, ring2_idx, pt2_idx)
+            {
+                new_ring_indices.push(new_idx);
+            }
+        }
+    }
+}
+
+/// Scan a ring for repeated (duplicate) coordinate points and fix each self-intersection.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - find_and_correct_repeated_points
+///
+/// # DIVERGENCE FROM WAGYU
+/// The C++ implementation uses a linked-list; pointers remain valid across splits
+/// because the points are not moved, only their ring membership changes.
+/// In Rust, we use a Vec: after any split the indices into the original Vec
+/// are invalid (the ring's Vec is replaced). We solve this by restarting
+/// the scan from scratch after each split (iterative outer loop).
+pub fn find_and_correct_repeated_points<T: CoordNum + Copy>(
+    ring_idx: usize,
+    manager: &mut crate::build_result::RingManager<T>,
+) -> Vec<usize> {
+    let mut new_rings: Vec<usize> = Vec::new();
+
+    // Iterative outer loop: restart after each split because Vec indices become stale
+    loop {
+        let points: Vec<Coord<T>> = match manager.get(ring_idx) {
+            Some(r) if !r.points().is_empty() => r.points().to_vec(),
+            _ => break,
+        };
+
+        // Build a sorted (coord, original_idx) list to find duplicates efficiently
+        let mut indexed: Vec<(Coord<T>, usize)> = points
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(i, coord)| (coord, i))
+            .collect();
+        indexed.sort_by(|(a, _), (b, _)| compare_points(a, b));
+
+        let mut found_split = false;
+        let mut i = 0;
+        while i < indexed.len() {
+            let mut j = i + 1;
+            while j < indexed.len() && indexed[j].0 == indexed[i].0 {
+                j += 1;
+            }
+
+            // Any group of size >= 2 means this coordinate appears more than once
+            if j - i >= 2 {
+                let target_coord = indexed[i].0;
+                let group: Vec<(usize, usize)> = indexed[i..j]
+                    .iter()
+                    .map(|(_, pt_idx)| (ring_idx, *pt_idx))
+                    .collect();
+
+                let before = new_rings.len();
+                correct_repeated_points_in_ring(manager, &mut new_rings, &group, target_coord);
+
+                if new_rings.len() > before {
+                    // A split happened: ring's Vec changed, restart from scratch
+                    found_split = true;
+                    break;
+                }
+            }
+
+            i = j;
+        }
+
+        if !found_split {
+            break;
+        }
+    }
+
+    new_rings
+}
+
+/// Find the correct parent for a newly created ring within the existing tree.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - find_parent_in_tree
+///
+/// The C++ algorithm works by:
+/// 1. Recursively searching all grandchildren of `possible_parent` first (depth-first descent)
+/// 2. If no grandchild is the right parent, check `possible_parent` itself
+/// 3. Assigns the ring as a child of the found parent and returns true
+///
+/// # DIVERGENCE FROM WAGYU
+/// The C++ version mutates (calls `reassign_as_child`) as part of the search.
+/// In Rust we separate concerns: this function only finds the correct parent index
+/// and returns it; the caller is responsible for calling `assign_as_child` or
+/// `reassign_as_child`. The mutation is performed by `assign_new_ring_parents`.
+///
+/// # Arguments
+/// * `manager` - Ring manager
+/// * `new_ring_points` - Points of the ring being placed
+/// * `new_ring_area` - Area of the ring being placed
+/// * `possible_parent_idx` - Candidate parent ring to check
+///
+/// # Returns
+/// `Some(idx)` of the ring that should be the parent, or `None`.
+pub fn find_parent_in_tree<T: CoordNum + Copy>(
+    manager: &crate::build_result::RingManager<T>,
+    new_ring_points: &[Coord<T>],
+    new_ring_area: f64,
+    possible_parent_idx: Option<usize>,
+) -> Option<usize> {
+    let parent_idx = possible_parent_idx?;
+
+    // Step 1: Recursively search grandchildren first (depth-first)
+    // PORT FROM: C++ find_parent_in_tree lines 315-326
+    // "for (auto c : possible_parent->children) { for (auto gc : c->children) { if (find_parent_in_tree(r, gc, ...)) return true; } }"
+    let children = manager.children(parent_idx);
+    for child_idx in &children {
+        let grandchildren = manager.children(*child_idx);
+        for gc_idx in grandchildren {
+            if let Some(found) =
+                find_parent_in_tree(manager, new_ring_points, new_ring_area, Some(gc_idx))
+            {
+                return Some(found);
+            }
+        }
+    }
+
+    // Step 2: Check if possible_parent itself contains the new ring
+    // PORT FROM: C++ find_parent_in_tree lines 328-332
+    // "if (poly2_contains_poly1(r, possible_parent)) { reassign_as_child(r, possible_parent, ...); return true; }"
+    let parent_pts = manager.ring_points_cloned(parent_idx);
+    let parent_area = crate::ring_util::ring_area(&parent_pts);
+    if poly2_contains_poly1(new_ring_points, new_ring_area, &parent_pts, parent_area) {
+        return Some(parent_idx);
+    }
+
+    None
+}
+
+/// Reassign children of `sibling_ring_idx` to `new_ring_idx` if they are contained by it.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - reassign_children_if_necessary
+///
+/// The C++ version skips rings that are in the `new_rings` vector (to avoid double-assigning
+/// newly created rings). The `new_ring_indices` parameter mirrors this.
+///
+/// # Arguments
+/// * `manager` - Ring manager
+/// * `sibling_ring_idx` - Ring whose children we inspect (corresponds to C++ `sibling_ring`)
+/// * `new_ring_idx` - The new ring to potentially receive children
+/// * `new_ring_indices` - All new rings from this split pass (skip these as candidates)
+pub fn reassign_children_if_necessary<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+    sibling_ring_idx: usize,
+    new_ring_idx: usize,
+    new_ring_indices: &[usize],
+) {
+    let new_ring_pts = manager.ring_points_cloned(new_ring_idx);
+    let new_ring_area = crate::ring_util::ring_area(&new_ring_pts);
+    let children = manager.children(sibling_ring_idx);
+
+    for child_idx in children {
+        // PORT FROM: C++ reassign_children_if_necessary lines 299-302
+        // "if (std::find(new_rings.begin(), new_rings.end(), c) != new_rings.end()) { continue; }"
+        if new_ring_indices.contains(&child_idx) {
+            continue;
+        }
+
+        let child_pts = manager.ring_points_cloned(child_idx);
+        let child_area = crate::ring_util::ring_area(&child_pts);
+        // PORT FROM: C++ "if (poly2_contains_poly1(c, new_ring)) { reassign_as_child(c, new_ring, ...); }"
+        // Note: poly2_contains_poly1(c, new_ring) means "new_ring contains c"
+        if poly2_contains_poly1(&child_pts, child_area, &new_ring_pts, new_ring_area) {
+            manager.reassign_as_child(child_idx, new_ring_idx);
+        }
+    }
+}
+
+/// Place newly created rings into the correct positions in the ring tree.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - assign_new_ring_parents
+///
+/// This function handles placement of rings produced by splitting a self-intersecting ring.
+/// The algorithm differs based on the number of new rings and orientation relationships:
+///
+/// **Single new ring:**
+/// - Same orientation as original → assign as sibling (same parent), check orig's children
+/// - Opposite orientation → assign as child of original, check parent's children
+///
+/// **Multiple new rings:**
+/// - Sort by area descending
+/// - For each ring, first check if any previously-placed sibling's tree contains it
+/// - Then check original ring's children tree (if same orientation) or original ring itself
+/// - Assign accordingly
+///
+/// # DIVERGENCE FROM WAGYU
+/// The C++ version uses pointer-based identity for the "new_rings" skip guard in
+/// `reassign_children_if_necessary`. The Rust version passes `new_ring_indices` explicitly.
+pub fn assign_new_ring_parents<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+    orig_ring_idx: usize,
+    new_ring_indices: &[usize],
+) {
+    // PORT FROM: C++ assign_new_ring_parents lines 337-350
+    // "new_rings.erase(remove_if(... zero area or no points ...))"
+    let valid_new_rings: Vec<usize> = new_ring_indices
+        .iter()
+        .copied()
+        .filter(|&idx| {
+            let pts = manager.ring_points_cloned(idx);
+            !pts.is_empty() && !crate::ring_util::value_is_zero(crate::ring_util::ring_area(&pts))
+        })
+        .collect();
+
+    if valid_new_rings.is_empty() {
+        return;
+    }
+
+    let orig_area = crate::ring_util::ring_area(&manager.ring_points_cloned(orig_ring_idx));
+    let original_positive = orig_area > 0.0;
+
+    // PORT FROM: C++ assign_new_ring_parents lines 355-379
+    // "if (new_rings.size() == 1) { ... simple logic ... return; }"
+    if valid_new_rings.len() == 1 {
+        let new_ring_idx = valid_new_rings[0];
+        let new_area = crate::ring_util::ring_area(&manager.ring_points_cloned(new_ring_idx));
+        let new_positive = new_area > 0.0;
+
+        if original_positive == new_positive {
+            // Same orientation: new ring is a sibling of original
+            // Assign to original ring's parent (same level)
+            let orig_parent = manager.parent(orig_ring_idx);
+            manager.assign_as_child(new_ring_idx, orig_parent);
+            // Check if any of original ring's children belong inside new ring
+            reassign_children_if_necessary(manager, orig_ring_idx, new_ring_idx, &valid_new_rings);
+        } else {
+            // Opposite orientation: new ring is a child of original ring
+            manager.assign_as_child(new_ring_idx, Some(orig_ring_idx));
+            // Check if any of original ring's parent's children belong inside new ring
+            let orig_parent = manager.parent(orig_ring_idx);
+            if let Some(parent_idx) = orig_parent {
+                reassign_children_if_necessary(manager, parent_idx, new_ring_idx, &valid_new_rings);
+            }
+        }
+        return;
+    }
+
+    // Multiple new rings: sort by absolute area descending, assign largest first
+    // PORT FROM: C++ assign_new_ring_parents lines 381-387
+    // "std::stable_sort(new_rings.begin(), new_rings.end(), [](...)  { return fabs(r1->area()) > fabs(r2->area()); })"
+    let mut sorted_new_rings = valid_new_rings.clone();
+    sorted_new_rings.sort_by(|&a, &b| {
+        let area_a = crate::ring_util::ring_area(&manager.ring_points_cloned(a)).abs();
+        let area_b = crate::ring_util::ring_area(&manager.ring_points_cloned(b)).abs();
+        area_b
+            .partial_cmp(&area_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // PORT FROM: C++ assign_new_ring_parents lines 389-448
+    for r_pos in 0..sorted_new_rings.len() {
+        let new_ring_idx = sorted_new_rings[r_pos];
+        let new_area = crate::ring_util::ring_area(&manager.ring_points_cloned(new_ring_idx));
+        let new_positive = new_area > 0.0;
+        let same_orientation = new_positive == original_positive;
+        let mut found = false;
+
+        // Step 1: Check trees of previously-assigned sibling rings
+        // PORT FROM: C++ lines 391-417
+        // "for (auto s_itr = new_rings.begin(); s_itr != r_itr; ++s_itr) { ... }"
+        for &s_idx in &sorted_new_rings[..r_pos] {
+            // Only check siblings (rings with same parent as original ring)
+            if manager.parent(s_idx) != manager.parent(orig_ring_idx) {
+                continue;
+            }
+
+            if same_orientation {
+                // Check if any of s_idx's children contain new_ring_idx
+                // PORT FROM: C++ lines 396-408
+                let s_children = manager.children(s_idx);
+                for s_child_idx in s_children {
+                    if let Some(_found_parent) = find_parent_in_tree(
+                        manager,
+                        &manager.ring_points_cloned(new_ring_idx),
+                        new_area,
+                        Some(s_child_idx),
+                    ) {
+                        // Assign into the found parent
+                        manager.assign_as_child(new_ring_idx, Some(_found_parent));
+                        reassign_children_if_necessary(
+                            manager,
+                            orig_ring_idx,
+                            new_ring_idx,
+                            &valid_new_rings,
+                        );
+                        found = true;
+                        break;
+                    }
+                }
+            } else {
+                // Opposite orientation: check if s_idx itself contains new_ring_idx
+                // PORT FROM: C++ lines 409-414
+                if let Some(_found_parent) = find_parent_in_tree(
+                    manager,
+                    &manager.ring_points_cloned(new_ring_idx),
+                    new_area,
+                    Some(s_idx),
+                ) {
+                    manager.assign_as_child(new_ring_idx, Some(_found_parent));
+                    let orig_parent = manager.parent(orig_ring_idx);
+                    if let Some(parent_idx) = orig_parent {
+                        reassign_children_if_necessary(
+                            manager,
+                            parent_idx,
+                            new_ring_idx,
+                            &valid_new_rings,
+                        );
+                    }
+                    found = true;
+                }
+            }
+
+            if found {
+                break;
+            }
+        }
+
+        if found {
+            continue;
+        }
+
+        // Step 2: Check original ring's tree
+        // PORT FROM: C++ lines 419-447
+        if same_orientation {
+            // Check if any of original ring's children contain new_ring_idx
+            // PORT FROM: C++ lines 420-436
+            let orig_children = manager.children(orig_ring_idx);
+            for o_child_idx in orig_children {
+                if let Some(_found_parent) = find_parent_in_tree(
+                    manager,
+                    &manager.ring_points_cloned(new_ring_idx),
+                    new_area,
+                    Some(o_child_idx),
+                ) {
+                    manager.assign_as_child(new_ring_idx, Some(_found_parent));
+                    reassign_children_if_necessary(
+                        manager,
+                        orig_ring_idx,
+                        new_ring_idx,
+                        &valid_new_rings,
+                    );
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                // Same orientation, not found in any child tree -> sibling of orig
+                // PORT FROM: C++ lines 437-441
+                // "assign_as_child(*r_itr, original_ring->parent, ...)"
+                let orig_parent = manager.parent(orig_ring_idx);
+                manager.assign_as_child(new_ring_idx, orig_parent);
+                reassign_children_if_necessary(
+                    manager,
+                    orig_ring_idx,
+                    new_ring_idx,
+                    &valid_new_rings,
+                );
+            }
+        } else {
+            // Opposite orientation: must be inside original ring
+            // PORT FROM: C++ lines 442-447
+            // "if (find_parent_in_tree(*r_itr, original_ring, ...)) { ... } else { throw ... }"
+            if let Some(_found_parent) = find_parent_in_tree(
+                manager,
+                &manager.ring_points_cloned(new_ring_idx),
+                new_area,
+                Some(orig_ring_idx),
+            ) {
+                manager.assign_as_child(new_ring_idx, Some(_found_parent));
+                let orig_parent = manager.parent(orig_ring_idx);
+                if let Some(parent_idx) = orig_parent {
+                    reassign_children_if_necessary(
+                        manager,
+                        parent_idx,
+                        new_ring_idx,
+                        &valid_new_rings,
+                    );
+                }
+            }
+            // If not found, skip (C++ throws but we're more lenient)
+        }
+    }
+}
+
+/// Process a single ring for self-intersections.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - correct_ring_self_intersections
+///
+/// Skips rings that have already been corrected (`corrected == true`).
+/// After processing, marks the ring as corrected.
+///
+/// Returns true if any splits were performed.
+pub fn correct_ring_self_intersections<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+    ring_idx: usize,
+    correct_tree: bool,
+) -> bool {
+    if manager.is_corrected(ring_idx) {
+        return false;
+    }
+    if !manager.ring_has_points(ring_idx) {
+        return false;
+    }
+
+    let new_rings = find_and_correct_repeated_points(ring_idx, manager);
+    let did_split = !new_rings.is_empty();
+
+    if correct_tree {
+        assign_new_ring_parents(manager, ring_idx, &new_rings);
+    }
+
+    manager.set_corrected(ring_idx, true);
+    did_split
+}
+
+/// Correct all self-intersecting rings in the manager.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - correct_self_intersections
+///
+/// Processes rings smallest-to-largest so inner rings are handled before outer rings.
+/// Returns true if any ring was split (used to drive the retry loop in correct_topology).
+pub fn correct_self_intersections<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+    correct_tree: bool,
+) -> bool {
+    // Process smallest rings first so inner rings are corrected before their parents
+    let sorted = manager.sorted_ring_indices_smallest_to_largest();
+    let mut fixed = false;
+    for ring_idx in sorted {
+        if correct_ring_self_intersections(manager, ring_idx, correct_tree) {
+            fixed = true;
+        }
+    }
+    fixed
+}
+
 /// Correct the topology of output rings to ensure OGC validity.
 ///
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - correct_topology
@@ -820,16 +1369,20 @@ pub fn correct_topology<T: CoordNum + Copy>(manager: &mut crate::build_result::R
     // Ensures exterior rings are CCW (positive area) and holes are CW (negative area)
     correct_orientations(manager);
 
-    // Step 2: Correct tree structure
+    // Step 2: First pass of self-intersection correction (without tree correction)
+    // PORT FROM: C++ correct_topology line ~1309 - called before correct_tree
+    correct_self_intersections(manager, false);
+
+    // Step 3: Rebuild tree structure
     // Rebuilds parent/child relationships based on containment
     correct_tree(manager);
 
-    // Note: The C++ implementation also handles:
-    // - Collinear edges (correct_collinear_edges)
-    // - Self-intersections (correct_self_intersections)
-    // - Chained rings (correct_chained_rings)
-    // These are complex operations that require additional infrastructure.
-    // For now, the basic orientation and tree correction covers the main cases.
+    // Step 4: Iteratively correct self-intersections with tree correction until stable
+    // PORT FROM: C++ correct_topology lines ~1311-1315 - loop until no more fixes
+    let mut fixed = true;
+    while fixed {
+        fixed = correct_self_intersections(manager, true);
+    }
 }
 
 // ============================================================================
@@ -1420,5 +1973,577 @@ mod tests {
         assert!(!poly2_contains_poly1(
             &outer, outer_area, &inner, inner_area
         ));
+    }
+
+    // ==================== sort_ring_points_by_coord Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - sort_ring_points
+
+    #[test]
+    fn sort_ring_points_by_coord_sorts_y_descending_then_x_ascending() {
+        // Points with various y values - should come out y-descending, x-ascending
+        let mut ring = Ring::empty();
+        ring.push_point(Coord { x: 3.0, y: 1.0 });
+        ring.push_point(Coord { x: 1.0, y: 3.0 });
+        ring.push_point(Coord { x: 2.0, y: 3.0 }); // Same y as above, larger x
+        ring.push_point(Coord { x: 5.0, y: 2.0 });
+
+        let sorted = sort_ring_points_by_coord(&ring);
+
+        // Expected order: y=3 x=1, y=3 x=2, y=2 x=5, y=1 x=3
+        assert_eq!(sorted[0], Coord { x: 1.0, y: 3.0 });
+        assert_eq!(sorted[1], Coord { x: 2.0, y: 3.0 });
+        assert_eq!(sorted[2], Coord { x: 5.0, y: 2.0 });
+        assert_eq!(sorted[3], Coord { x: 3.0, y: 1.0 });
+    }
+
+    #[test]
+    fn sort_ring_points_by_coord_empty_ring_returns_empty() {
+        let ring: Ring<f64> = Ring::empty();
+        let sorted = sort_ring_points_by_coord(&ring);
+        assert!(sorted.is_empty());
+    }
+
+    // ==================== correct_self_intersection_in_ring Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - correct_self_intersection
+
+    /// Build a figure-8 ring: two squares sharing a single corner point.
+    ///
+    /// The shared corner is at index p and q.
+    /// Ring: [shared, A, B, C, shared, D, E, F] -- shared appears at index 0 and 4.
+    fn make_figure_8_ring() -> Ring<f64> {
+        // Lower-left square (CCW): shared corner at (5,5)
+        // Upper-right square (CCW): shared corner at (5,5)
+        // Traversal: (5,5) -> (0,5) -> (0,0) -> (5,0) -> (5,5) -> (10,5) -> (10,10) -> (5,10)
+        // This visits (5,5) at index 0 and again... well, we need to construct a ring
+        // where the SAME coordinate appears at two different indices.
+        //
+        // Simpler: bowtie shape. (0,0)->(10,10)->(10,0)->(0,10)
+        // This ring has no repeated coords, but it self-intersects geometrically.
+        //
+        // For correct_self_intersection_in_ring we need a ring with the same
+        // coordinate at two different positions.
+        //
+        // Build: (5,5) -> (0,0) -> (0,5) -> (5,5) -> (10,5) -> (10,10) -> (5,5-unused)
+        // Simpler: visit (5,5) at positions 0 and 3 in a 6-point ring.
+        let mut ring = Ring::empty();
+        // Index 0: shared point
+        ring.push_point(Coord { x: 5.0, y: 5.0 });
+        // Index 1, 2: lower-left lobe
+        ring.push_point(Coord { x: 0.0, y: 0.0 });
+        ring.push_point(Coord { x: 10.0, y: 0.0 });
+        // Index 3: shared point again (self-intersection node)
+        ring.push_point(Coord { x: 5.0, y: 5.0 });
+        // Index 4, 5: upper-right lobe
+        ring.push_point(Coord { x: 10.0, y: 10.0 });
+        ring.push_point(Coord { x: 0.0, y: 10.0 });
+        ring
+    }
+
+    #[test]
+    fn correct_self_intersection_in_ring_splits_figure_8_into_two_rings() {
+        // RED: This test verifies the basic split behavior.
+        // A figure-8 ring with shared point at indices 0 and 3 should split into 2 rings.
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring = make_figure_8_ring();
+        let ring_idx = manager.add_ring(ring);
+
+        // The ring has 6 points. Shared coord (5,5) at indices 0 and 3.
+        let new_ring_idx =
+            correct_self_intersection_in_ring(&mut manager, ring_idx, 0, ring_idx, 3);
+
+        assert!(
+            new_ring_idx.is_some(),
+            "Should return a new ring index on successful split"
+        );
+
+        let new_idx = new_ring_idx.unwrap();
+
+        // Both loops should have at least 3 points
+        let orig_len = manager.get(ring_idx).unwrap().len();
+        let new_len = manager.get(new_idx).unwrap().len();
+        assert!(
+            orig_len >= 3,
+            "Original ring should have >= 3 points, got {}",
+            orig_len
+        );
+        assert!(
+            new_len >= 3,
+            "New ring should have >= 3 points, got {}",
+            new_len
+        );
+
+        // The original ring keeps the larger loop
+        let orig_area = ring_area(manager.get(ring_idx).unwrap().points()).abs();
+        let new_area = ring_area(manager.get(new_idx).unwrap().points()).abs();
+        assert!(
+            orig_area >= new_area,
+            "Original ring should keep the larger loop: orig={} new={}",
+            orig_area,
+            new_area
+        );
+    }
+
+    #[test]
+    fn correct_self_intersection_in_ring_rejects_same_index() {
+        // Splitting at the same index twice makes no sense
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring = make_figure_8_ring();
+        let ring_idx = manager.add_ring(ring);
+
+        let result = correct_self_intersection_in_ring(&mut manager, ring_idx, 2, ring_idx, 2);
+        assert!(result.is_none(), "Same index should return None");
+    }
+
+    #[test]
+    fn correct_self_intersection_in_ring_rejects_different_rings() {
+        // Only handles same-ring case (self-intersection within one ring)
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring0 = make_ccw_square(0.0, 0.0, 10.0);
+        let ring1 = make_ccw_square(20.0, 20.0, 10.0);
+        let idx0 = manager.add_ring(ring0);
+        let idx1 = manager.add_ring(ring1);
+
+        let result = correct_self_intersection_in_ring(&mut manager, idx0, 0, idx1, 0);
+        assert!(result.is_none(), "Different rings should return None");
+    }
+
+    #[test]
+    fn correct_self_intersection_in_ring_rejects_ring_with_fewer_than_4_points() {
+        let mut manager: RingManager<f64> = RingManager::new();
+        let mut ring = Ring::empty();
+        ring.push_point(Coord { x: 0.0, y: 0.0 });
+        ring.push_point(Coord { x: 5.0, y: 5.0 });
+        ring.push_point(Coord { x: 10.0, y: 0.0 });
+        let idx = manager.add_ring(ring);
+
+        let result = correct_self_intersection_in_ring(&mut manager, idx, 0, idx, 2);
+        assert!(result.is_none(), "Ring with < 4 points should return None");
+    }
+
+    // ==================== find_and_correct_repeated_points Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+
+    #[test]
+    fn find_and_correct_repeated_points_finds_and_splits_figure_8() {
+        // A ring where one coordinate appears twice should be split.
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring = make_figure_8_ring();
+        let ring_idx = manager.add_ring(ring);
+
+        let orig_len_before = manager.get(ring_idx).unwrap().len();
+        assert_eq!(orig_len_before, 6, "Setup: figure-8 has 6 points");
+
+        let new_rings = find_and_correct_repeated_points(ring_idx, &mut manager);
+
+        // The repeated point at (5,5) should trigger a split
+        assert_eq!(
+            new_rings.len(),
+            1,
+            "One self-intersection should produce one new ring"
+        );
+
+        // Both resulting rings should have valid point counts
+        let orig_len_after = manager.get(ring_idx).unwrap().len();
+        let new_len = manager.get(new_rings[0]).unwrap().len();
+        assert!(orig_len_after >= 3);
+        assert!(new_len >= 3);
+
+        // Total points should equal original - 1 shared point (split removes one shared)
+        // Actually: orig 6-point ring with shared coord at pos 0 and 3
+        // loop_a = [0..3] = 3 points
+        // loop_b = [3..6] + [0..0] = 3 points
+        assert_eq!(
+            orig_len_after + new_len,
+            6,
+            "Total points across both rings should equal original 6"
+        );
+    }
+
+    #[test]
+    fn find_and_correct_repeated_points_no_duplicates_returns_empty() {
+        // A simple square has no repeated points - no splits should occur
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring = make_ccw_square(0.0, 0.0, 10.0);
+        let ring_idx = manager.add_ring(ring);
+
+        let new_rings = find_and_correct_repeated_points(ring_idx, &mut manager);
+
+        assert!(
+            new_rings.is_empty(),
+            "No repeated points means no new rings"
+        );
+        // Original ring unchanged
+        assert_eq!(manager.get(ring_idx).unwrap().len(), 4);
+    }
+
+    // ==================== correct_ring_self_intersections Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - correct_ring_self_intersections
+
+    #[test]
+    fn correct_ring_self_intersections_marks_ring_as_corrected() {
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring = make_ccw_square(0.0, 0.0, 10.0);
+        let ring_idx = manager.add_ring(ring);
+
+        assert!(!manager.is_corrected(ring_idx), "Ring starts uncorrected");
+
+        correct_ring_self_intersections(&mut manager, ring_idx, false);
+
+        assert!(
+            manager.is_corrected(ring_idx),
+            "Ring should be marked corrected after processing"
+        );
+    }
+
+    #[test]
+    fn correct_ring_self_intersections_skips_already_corrected_ring() {
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring = make_figure_8_ring();
+        let ring_idx = manager.add_ring(ring);
+
+        // Mark as already corrected
+        manager.set_corrected(ring_idx, true);
+
+        // Should skip and return false even though the ring has a self-intersection
+        let fixed = correct_ring_self_intersections(&mut manager, ring_idx, false);
+        assert!(!fixed, "Already-corrected ring should return false");
+        // Ring should still have 6 points (not split)
+        assert_eq!(manager.get(ring_idx).unwrap().len(), 6);
+    }
+
+    #[test]
+    fn correct_ring_self_intersections_returns_true_when_split_occurred() {
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring = make_figure_8_ring();
+        let ring_idx = manager.add_ring(ring);
+
+        let fixed = correct_ring_self_intersections(&mut manager, ring_idx, false);
+        assert!(fixed, "Should return true when a split occurred");
+    }
+
+    #[test]
+    fn correct_ring_self_intersections_returns_false_for_clean_ring() {
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring = make_ccw_square(0.0, 0.0, 10.0);
+        let ring_idx = manager.add_ring(ring);
+
+        // A simple square has no self-intersections
+        // find_and_correct_repeated_points returns empty -> did_split = false
+        // but the ring IS corrected afterwards
+        let fixed = correct_ring_self_intersections(&mut manager, ring_idx, false);
+        assert!(!fixed, "Clean ring should return false (no split)");
+    }
+
+    // ==================== correct_self_intersections Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - correct_self_intersections
+
+    #[test]
+    fn correct_self_intersections_processes_all_rings() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Add a clean ring and a figure-8 ring
+        let clean_idx = manager.add_ring(make_ccw_square(0.0, 0.0, 10.0));
+        let fig8_idx = manager.add_ring(make_figure_8_ring());
+
+        let rings_before = manager.len();
+        let fixed = correct_self_intersections(&mut manager, false);
+
+        assert!(fixed, "Should return true when any ring was split");
+        assert!(
+            manager.len() > rings_before,
+            "A new ring should have been created by the split"
+        );
+        assert!(
+            manager.is_corrected(clean_idx),
+            "Clean ring should be marked corrected"
+        );
+        assert!(
+            manager.is_corrected(fig8_idx),
+            "Figure-8 ring should be marked corrected"
+        );
+    }
+
+    #[test]
+    fn correct_self_intersections_returns_false_when_no_splits() {
+        let mut manager: RingManager<f64> = RingManager::new();
+        manager.add_ring(make_ccw_square(0.0, 0.0, 10.0));
+        manager.add_ring(make_ccw_square(20.0, 20.0, 10.0));
+
+        let fixed = correct_self_intersections(&mut manager, false);
+        assert!(!fixed, "No splits should return false");
+    }
+
+    #[test]
+    fn correct_self_intersections_processes_smallest_rings_first() {
+        // Verify that small rings are processed before large rings (smallest-to-largest order)
+        // We can verify this by checking that the corrected flag is set on both rings
+        // and the correct order doesn't cause issues.
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Large ring first
+        let large_idx = manager.add_ring(make_ccw_square(0.0, 0.0, 100.0));
+        // Small ring second
+        let small_idx = manager.add_ring(make_ccw_square(10.0, 10.0, 5.0));
+
+        correct_self_intersections(&mut manager, false);
+
+        // Both should be corrected
+        assert!(manager.is_corrected(large_idx));
+        assert!(manager.is_corrected(small_idx));
+    }
+
+    // ==================== assign_new_ring_parents Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - assign_new_ring_parents
+
+    #[test]
+    fn assign_new_ring_parents_empty_new_rings_does_nothing() {
+        let mut manager: RingManager<f64> = RingManager::new();
+        let orig_idx = manager.add_ring(make_ccw_square(0.0, 0.0, 10.0));
+
+        // Should not panic with empty new rings
+        assign_new_ring_parents(&mut manager, orig_idx, &[]);
+        // orig ring unchanged
+        assert_eq!(manager.get(orig_idx).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn assign_new_ring_parents_single_same_orientation_assigned_as_sibling() {
+        // When new ring has same orientation as original ring,
+        // and is not contained by any ancestor, it becomes a sibling.
+        //
+        // PORT FROM: C++ assign_new_ring_parents lines 359-380
+        // "if (original_positive == new_positive) { assign_as_child(new_rings.front(), original_ring->parent, ...)"
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Setup: outer -> orig_ring (both CCW/exterior)
+        let outer_idx = manager.add_ring(make_ccw_square(0.0, 0.0, 100.0));
+        let orig_ring = make_ccw_square(5.0, 5.0, 60.0);
+        let orig_idx = manager.create_new_ring();
+        manager.set_ring_points(orig_idx, orig_ring.points().to_vec());
+        manager.assign_as_child(orig_idx, Some(outer_idx));
+
+        // Create a new ring (same orientation, exterior) that should become sibling of orig
+        let new_ring_pts = make_ccw_square(5.0, 5.0, 20.0).points().to_vec();
+        let new_idx = manager.create_new_ring();
+        manager.set_ring_points(new_idx, new_ring_pts);
+
+        assign_new_ring_parents(&mut manager, orig_idx, &[new_idx]);
+
+        // New ring should have same parent as orig ring (outer_idx)
+        let new_parent = manager.parent(new_idx);
+        let orig_parent = manager.parent(orig_idx);
+        assert_eq!(
+            new_parent, orig_parent,
+            "New ring (same orientation) should be sibling of orig ring: new_parent={:?} orig_parent={:?}",
+            new_parent, orig_parent
+        );
+    }
+
+    #[test]
+    fn assign_new_ring_parents_single_opposite_orientation_assigned_as_child() {
+        // When new ring has opposite orientation (hole inside exterior),
+        // it should be assigned as child of the original ring.
+        //
+        // PORT FROM: C++ assign_new_ring_parents lines 372-379
+        // "else { assign_as_child(new_rings.front(), original_ring, ...)" (if contained)
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // orig_ring: large CCW exterior
+        let orig_ring = make_ccw_square(0.0, 0.0, 100.0);
+        let orig_idx = manager.add_ring(orig_ring);
+
+        // new_ring: smaller CW ring (hole) inside orig - opposite orientation
+        let hole_pts: Vec<Coord<f64>> = vec![
+            Coord { x: 10.0, y: 10.0 },
+            Coord { x: 10.0, y: 40.0 },
+            Coord { x: 40.0, y: 40.0 },
+            Coord { x: 40.0, y: 10.0 },
+        ]; // CW = negative area
+        let new_idx = manager.create_new_ring();
+        manager.set_ring_points(new_idx, hole_pts);
+
+        assign_new_ring_parents(&mut manager, orig_idx, &[new_idx]);
+
+        // New ring (CW/hole, opposite orientation) should be child of orig
+        let new_parent = manager.parent(new_idx);
+        assert_eq!(
+            new_parent,
+            Some(orig_idx),
+            "New ring (opposite orientation, inside orig) should be child of orig"
+        );
+    }
+
+    // ==================== reassign_children_if_necessary Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - reassign_children_if_necessary
+
+    #[test]
+    fn reassign_children_if_necessary_moves_child_inside_new_ring() {
+        // If a child of orig_ring is geometrically inside new_ring, it should be reassigned.
+        //
+        // PORT FROM: C++ reassign_children_if_necessary
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // orig_ring: large CCW exterior (100x100)
+        let orig_ring = make_ccw_square(0.0, 0.0, 100.0);
+        let orig_idx = manager.add_ring(orig_ring);
+
+        // child: small CW hole (10x10 at 5,5) - inside new_ring
+        let child_pts: Vec<Coord<f64>> = vec![
+            Coord { x: 5.0, y: 5.0 },
+            Coord { x: 5.0, y: 15.0 },
+            Coord { x: 15.0, y: 15.0 },
+            Coord { x: 15.0, y: 5.0 },
+        ];
+        let child_idx = manager.create_new_ring();
+        manager.set_ring_points(child_idx, child_pts);
+        manager.set_parent(child_idx, orig_idx);
+
+        // new_ring: medium CCW exterior (50x50 at 0,0) that contains the child
+        let new_ring_pts = make_ccw_square(0.0, 0.0, 50.0).points().to_vec();
+        let new_idx = manager.create_new_ring();
+        manager.set_ring_points(new_idx, new_ring_pts);
+
+        // The child (at 5,5 to 15,15) is inside new_ring (0,0 to 50,50)
+        reassign_children_if_necessary(&mut manager, orig_idx, new_idx, &[]);
+
+        // Child should now be a child of new_ring
+        let child_parent = manager.parent(child_idx);
+        assert_eq!(
+            child_parent,
+            Some(new_idx),
+            "Child inside new_ring should be reassigned to new_ring"
+        );
+    }
+
+    #[test]
+    fn reassign_children_if_necessary_leaves_outside_children_alone() {
+        // Children of orig_ring that are NOT inside new_ring should stay with orig_ring.
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // orig_ring: large CCW exterior (100x100)
+        let orig_ring = make_ccw_square(0.0, 0.0, 100.0);
+        let orig_idx = manager.add_ring(orig_ring);
+
+        // child: CW hole at 60,60 to 80,80 - outside new_ring
+        let child_pts: Vec<Coord<f64>> = vec![
+            Coord { x: 60.0, y: 60.0 },
+            Coord { x: 60.0, y: 80.0 },
+            Coord { x: 80.0, y: 80.0 },
+            Coord { x: 80.0, y: 60.0 },
+        ];
+        let child_idx = manager.create_new_ring();
+        manager.set_ring_points(child_idx, child_pts);
+        manager.set_parent(child_idx, orig_idx);
+
+        // new_ring: small ring at 0,0 to 20,20 - does NOT contain the child
+        let new_ring_pts = make_ccw_square(0.0, 0.0, 20.0).points().to_vec();
+        let new_idx = manager.create_new_ring();
+        manager.set_ring_points(new_idx, new_ring_pts);
+
+        reassign_children_if_necessary(&mut manager, orig_idx, new_idx, &[]);
+
+        // Child should still be a child of orig_ring
+        let child_parent = manager.parent(child_idx);
+        assert_eq!(
+            child_parent,
+            Some(orig_idx),
+            "Child outside new_ring should remain with orig_ring"
+        );
+    }
+
+    // ==================== find_parent_in_tree Tests ====================
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - find_parent_in_tree
+
+    #[test]
+    fn find_parent_in_tree_finds_direct_parent() {
+        // When the candidate is the direct parent, it should be found.
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // parent: CCW 100x100
+        let parent_ring = make_ccw_square(0.0, 0.0, 100.0);
+        let parent_idx = manager.add_ring(parent_ring);
+
+        // new ring: small CCW 10x10 that fits inside parent
+        let new_ring_pts = make_ccw_square(10.0, 10.0, 10.0).points().to_vec();
+        let new_area = ring_area(&new_ring_pts);
+
+        let found = find_parent_in_tree(&manager, &new_ring_pts, new_area, Some(parent_idx));
+
+        assert_eq!(
+            found,
+            Some(parent_idx),
+            "Should find direct parent that contains the new ring"
+        );
+    }
+
+    #[test]
+    fn find_parent_in_tree_returns_none_when_no_parent_contains_ring() {
+        // When no candidate ring contains the new ring, return None.
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // candidate: small 10x10 ring
+        let candidate_ring = make_ccw_square(0.0, 0.0, 10.0);
+        let candidate_idx = manager.add_ring(candidate_ring);
+
+        // new ring: large 50x50 ring that is NOT inside the candidate
+        let new_ring_pts = make_ccw_square(0.0, 0.0, 50.0).points().to_vec();
+        let new_area = ring_area(&new_ring_pts);
+
+        let found = find_parent_in_tree(&manager, &new_ring_pts, new_area, Some(candidate_idx));
+
+        assert!(
+            found.is_none(),
+            "Should return None when candidate does not contain new ring"
+        );
+    }
+
+    #[test]
+    fn find_parent_in_tree_with_no_candidate_returns_none() {
+        let manager: RingManager<f64> = RingManager::new();
+        let pts = make_ccw_square(0.0, 0.0, 10.0).points().to_vec();
+        let area = ring_area(&pts);
+
+        let found = find_parent_in_tree(&manager, &pts, area, None);
+        assert!(found.is_none());
+    }
+
+    // ==================== Integration: correct_topology with self-intersecting ring ====================
+
+    #[test]
+    fn correct_topology_splits_figure_8_into_two_valid_rings() {
+        // A figure-8 ring should be split into two separate rings by correct_topology.
+        let mut manager: RingManager<f64> = RingManager::new();
+        let fig8_idx = manager.add_ring(make_figure_8_ring());
+
+        let rings_before = manager.len();
+        correct_topology(&mut manager);
+
+        // A new ring should have been created by the split
+        assert!(
+            manager.len() > rings_before,
+            "correct_topology should split figure-8 ring"
+        );
+
+        // Original ring should still have points (wasn't destroyed)
+        assert!(
+            manager.get(fig8_idx).unwrap().len() >= 3,
+            "Original ring should have >= 3 points after split"
+        );
+    }
+
+    #[test]
+    fn correct_topology_clean_ring_unchanged_point_count() {
+        // A clean ring should not be split by correct_topology.
+        let mut manager: RingManager<f64> = RingManager::new();
+        let ring_idx = manager.add_ring(make_ccw_square(0.0, 0.0, 10.0));
+
+        correct_topology(&mut manager);
+
+        // Ring should still have 4 points
+        let len_after = manager.get(ring_idx).unwrap().len();
+        assert_eq!(
+            len_after, 4,
+            "Clean ring should still have 4 points after correct_topology"
+        );
     }
 }

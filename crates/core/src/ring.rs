@@ -27,6 +27,13 @@ pub struct Ring<T: CoordNum> {
     parent: Option<usize>,
     /// Indices of child rings (holes within this ring)
     children: Vec<usize>,
+    /// Whether this ring has already been processed by correct_self_intersections.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring.hpp - ring_ptr.corrected
+    ///
+    /// Set to true after correct_ring_self_intersections processes a ring,
+    /// preventing redundant reprocessing in subsequent passes.
+    pub corrected: bool,
 }
 
 impl<T: CoordNum> Ring<T> {
@@ -38,6 +45,7 @@ impl<T: CoordNum> Ring<T> {
             ring_index: 0,
             parent: None,
             children: Vec::new(),
+            corrected: false,
         }
     }
 
@@ -49,6 +57,7 @@ impl<T: CoordNum> Ring<T> {
             ring_index: 0,
             parent: None,
             children: Vec::new(),
+            corrected: false,
         }
     }
 
@@ -142,6 +151,16 @@ impl<T: CoordNum> Ring<T> {
         } else {
             false
         }
+    }
+
+    /// Returns whether this ring has been processed by correct_self_intersections.
+    pub fn is_corrected(&self) -> bool {
+        self.corrected
+    }
+
+    /// Mark this ring as corrected (or uncorrected).
+    pub fn set_corrected(&mut self, corrected: bool) {
+        self.corrected = corrected;
     }
 
     /// Returns a reference to the ring's points.

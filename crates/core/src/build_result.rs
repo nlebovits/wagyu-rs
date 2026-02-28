@@ -239,6 +239,153 @@ impl<T: CoordNum> RingManager<T> {
             None => false,
         }
     }
+
+    // =========================================================================
+    // Methods for correct_self_intersections
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+    // =========================================================================
+
+    /// Create a new empty ring and return its index.
+    ///
+    /// The ring has no parent, no children, and no points.
+    /// Caller is responsible for setting up hierarchy with assign_new_ring_parents.
+    pub fn create_new_ring(&mut self) -> usize {
+        let index = self.rings.len();
+        let mut ring = Ring::empty();
+        ring.set_ring_index(index);
+        self.rings.push(ring);
+        index
+    }
+
+    /// Assign a ring as a child of a parent (or as top-level if parent is None).
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - assign_as_child
+    pub fn assign_as_child(&mut self, child_idx: usize, new_parent_idx: Option<usize>) {
+        // Set hole status based on parent: child of exterior is a hole, child of hole is exterior
+        let is_hole = match new_parent_idx {
+            Some(p) => !self.ring_is_hole(p),
+            None => false,
+        };
+        if let Some(ring) = self.rings.get_mut(child_idx) {
+            ring.set_hole(is_hole);
+            ring.set_parent(new_parent_idx);
+        }
+        match new_parent_idx {
+            Some(p) => {
+                if let Some(parent) = self.rings.get_mut(p) {
+                    parent.add_child(child_idx);
+                }
+            }
+            None => {
+                if !is_hole && !self.top_level_rings.contains(&child_idx) {
+                    self.top_level_rings.push(child_idx);
+                }
+            }
+        }
+    }
+
+    /// Reassign a ring from its current parent to a new parent.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - reassign_as_child
+    pub fn reassign_as_child(&mut self, child_idx: usize, new_parent_idx: usize) {
+        // Remove from old parent
+        let old_parent = self.rings.get(child_idx).and_then(|r| r.parent());
+        match old_parent {
+            Some(old_p) => {
+                if let Some(old_parent_ring) = self.rings.get_mut(old_p) {
+                    old_parent_ring.remove_child(child_idx);
+                }
+            }
+            None => {
+                self.top_level_rings.retain(|&idx| idx != child_idx);
+            }
+        }
+        // Assign to new parent
+        self.assign_as_child(child_idx, Some(new_parent_idx));
+    }
+
+    /// Assign a ring as a sibling of another ring (same parent).
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - assign_as_sibling
+    pub fn assign_as_sibling(&mut self, new_ring_idx: usize, sibling_idx: usize) {
+        let sibling_parent = self.rings.get(sibling_idx).and_then(|r| r.parent());
+        self.assign_as_child(new_ring_idx, sibling_parent);
+    }
+
+    /// Get the signed area of a ring as f64.
+    pub fn ring_area_signed(&self, ring_idx: usize) -> f64 {
+        match self.rings.get(ring_idx) {
+            Some(ring) => crate::ring_util::ring_area(ring.points()),
+            None => 0.0,
+        }
+    }
+
+    /// Get the indices of all direct children of a ring.
+    pub fn children(&self, ring_idx: usize) -> Vec<usize> {
+        match self.rings.get(ring_idx) {
+            Some(ring) => ring.children().to_vec(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Get the parent index of a ring.
+    pub fn parent(&self, ring_idx: usize) -> Option<usize> {
+        self.rings.get(ring_idx)?.parent()
+    }
+
+    /// Check if a ring has been processed by correct_self_intersections.
+    pub fn is_corrected(&self, ring_idx: usize) -> bool {
+        self.rings
+            .get(ring_idx)
+            .map(|r| r.corrected)
+            .unwrap_or(false)
+    }
+
+    /// Mark a ring as corrected (or uncorrected).
+    pub fn set_corrected(&mut self, ring_idx: usize, corrected: bool) {
+        if let Some(ring) = self.rings.get_mut(ring_idx) {
+            ring.corrected = corrected;
+        }
+    }
+
+    /// Return ring indices sorted by ascending absolute area (smallest first).
+    ///
+    /// Inner rings have smaller area than outer rings, so this processes
+    /// inner rings before outer rings.
+    pub fn sorted_ring_indices_smallest_to_largest(&self) -> Vec<usize> {
+        let mut pairs: Vec<(usize, f64)> = self
+            .rings
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.points().len() >= 3)
+            .map(|(i, r)| (i, crate::ring_util::ring_area(r.points()).abs()))
+            .collect();
+        pairs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        pairs.into_iter().map(|(i, _)| i).collect()
+    }
+
+    /// Replace the points of a ring with new_points.
+    pub fn set_ring_points(&mut self, ring_idx: usize, new_points: Vec<geo_types::Coord<T>>) {
+        if let Some(ring) = self.rings.get_mut(ring_idx) {
+            *ring.points_mut() = new_points;
+        }
+    }
+
+    /// Clone and return the points of a ring.
+    pub fn ring_points_cloned(&self, ring_idx: usize) -> Vec<geo_types::Coord<T>> {
+        match self.rings.get(ring_idx) {
+            Some(ring) => ring.points().to_vec(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Check if a ring has any points.
+    pub fn ring_has_points(&self, ring_idx: usize) -> bool {
+        self.rings
+            .get(ring_idx)
+            .map(|r| !r.points().is_empty())
+            .unwrap_or(false)
+    }
 }
 
 /// Convert a Ring to a LineString (linear ring in geo_types terminology).
