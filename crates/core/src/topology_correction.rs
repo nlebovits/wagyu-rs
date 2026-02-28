@@ -1428,6 +1428,19 @@ fn has_collinear_edge<T: CoordNum>(
     let len_a = ring_a.points().len();
     let len_b = ring_b.points().len();
 
+    // CRITICAL FIX: For same-ring comparisons where we're comparing point 0 with point N-1
+    // (the OGC closing pair), check2 will give a false positive because:
+    //   - prev_a wraps to point N-1 (same as pt_b)
+    //   - next_b wraps to point 0 (same as pt_a)
+    // So we skip check2 but still run check1 (which detects actual degenerate spikes).
+    let is_closing_pair = pt_a.ring_idx == pt_b.ring_idx && {
+        let min_idx = pt_a.point_idx.min(pt_b.point_idx);
+        let max_idx = pt_a.point_idx.max(pt_b.point_idx);
+        min_idx == 0
+            && max_idx == len_a - 1
+            && coords_equal(&ring_a.points()[0], &ring_a.points()[len_a - 1])
+    };
+
     // Get next point for A and prev point for B
     let next_a_idx = (pt_a.point_idx + 1) % len_a;
     let prev_b_idx = (pt_b.point_idx + len_b - 1) % len_b;
@@ -1441,8 +1454,12 @@ fn has_collinear_edge<T: CoordNum>(
     let prev_a = &ring_a.points()[prev_a_idx];
     let next_b = &ring_b.points()[next_b_idx];
 
-    // Check if edges overlay: next_a == prev_b or next_b == prev_a
-    coords_equal(next_a, prev_b) || coords_equal(next_b, prev_a)
+    // Check if edges overlay: next_a == prev_b or (next_b == prev_a if not a closing pair)
+    // check1 detects actual collinear edges (including degenerate spikes)
+    // check2 is skipped for closing pairs to avoid false positives from wrapping
+    let check1 = coords_equal(next_a, prev_b);
+    let check2 = !is_closing_pair && coords_equal(next_b, prev_a);
+    check1 || check2
 }
 
 /// Get the next point index in a ring (circular).
