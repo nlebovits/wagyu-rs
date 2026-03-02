@@ -15,9 +15,16 @@ categories.workspace = true
 name = "wagyu-rs"
 path = "src/main.rs"
 
+[[bin]]
+name = "wagyu-oracle"
+path = "src/oracle.rs"
+
 [dependencies]
 wagyu-rs = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+geo-types = { workspace = true }
