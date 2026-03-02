@@ -1,0 +1,17 @@
+{
+  "_comment": "Issue #29: XOR nested multi-polygon operations fail",
+  "_description": "Outer square with inner square - XOR should handle nesting",
+  "_bug": "Combination of XOR winding bug and nested ring handling",
+  "_operation": "xor",
+  "_fill": "evenodd",
+  "subject": [
+    [
+      [[0, 0], [20, 0], [20, 20], [0, 20], [0, 0]]
+    ]
+  ],
+  "clip": [
+    [
+      [[5, 5], [15, 5], [15, 15], [5, 15], [5, 5]]
+    ]
+  ]
+}

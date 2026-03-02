@@ -1,0 +1,20 @@
+{
+  "_comment": "Issue #37: Handle chained merges for multi-ring chains",
+  "_description": "Three squares sharing boundary points - requires 3+ ring chain merge",
+  "_bug": "Only basic two-ring merges handled, not full chains",
+  "_operation": "union",
+  "_fill": "evenodd",
+  "subject": [
+    [
+      [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]
+    ]
+  ],
+  "clip": [
+    [
+      [[10, 0], [20, 0], [20, 10], [10, 10], [10, 0]]
+    ],
+    [
+      [[10, 10], [20, 10], [20, 20], [10, 20], [10, 10]]
+    ]
+  ]
+}

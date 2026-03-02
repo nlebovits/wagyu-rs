@@ -1,0 +1,17 @@
+{
+  "_comment": "Issue #30: polygon_no_interior edge case produces wrong output",
+  "_description": "Large subject covers smaller clip - difference should produce donut",
+  "_bug": "Complete containment scenarios not handled correctly",
+  "_operation": "difference",
+  "_fill": "evenodd",
+  "subject": [
+    [
+      [[0, 0], [20, 0], [20, 20], [0, 20], [0, 0]]
+    ]
+  ],
+  "clip": [
+    [
+      [[5, 5], [15, 5], [15, 15], [5, 15], [5, 5]]
+    ]
+  ]
+}

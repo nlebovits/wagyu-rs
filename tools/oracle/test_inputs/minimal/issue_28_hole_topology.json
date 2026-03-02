@@ -1,0 +1,15 @@
+{
+  "_comment": "Issue #28: Complex hole topology assigned incorrectly",
+  "_description": "Square with two overlapping holes - holes should merge correctly",
+  "_bug": "Parent/child ring relationships incorrect for intersecting holes",
+  "_operation": "union",
+  "_fill": "evenodd",
+  "subject": [
+    [
+      [[0, 0], [20, 0], [20, 20], [0, 20], [0, 0]],
+      [[4, 4], [4, 12], [12, 12], [12, 4], [4, 4]],
+      [[8, 8], [8, 16], [16, 16], [16, 8], [8, 8]]
+    ]
+  ],
+  "clip": []
+}

@@ -1,0 +1,17 @@
+{
+  "_comment": "Issue #36: Hot pixel insertion in horizontal edge processing",
+  "_description": "Rectangles with shared horizontal edge - tests precision handling",
+  "_bug": "Hot pixels not inserted during horizontal edge advancement",
+  "_operation": "union",
+  "_fill": "evenodd",
+  "subject": [
+    [
+      [[0, 10], [10, 10], [10, 0], [0, 0], [0, 10]]
+    ]
+  ],
+  "clip": [
+    [
+      [[5, 10], [15, 10], [15, 5], [5, 5], [5, 10]]
+    ]
+  ]
+}
