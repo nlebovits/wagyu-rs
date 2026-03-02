@@ -248,33 +248,19 @@ pub fn insert_local_minima_into_abl<T: CoordNum + ToPrimitive>(
         bounds[right_idx].winding_count = left_wc;
         bounds[right_idx].winding_count2 = left_wc2;
 
-        // DEBUG: Trace local minimum insertion
-        if std::env::var("WAGYU_DEBUG").is_ok() {
-            let bot = bounds[left_idx].current_edge().bot;
-            let poly_type = bounds[left_idx].poly_type;
-            let contributing = winding::is_contributing(
-                &bounds[left_idx],
-                cliptype,
-                subject_fill_type,
-                clip_fill_type,
-            );
-            eprintln!(
-                "DEBUG: LM at ({},{}) poly_type={:?} wc={} wc2={} contributing={}",
-                bot.x.to_f64().unwrap_or(0.0),
-                bot.y.to_f64().unwrap_or(0.0),
-                poly_type,
-                left_wc,
-                left_wc2,
-                contributing
-            );
-            eprintln!("DEBUG: AEL state: {:?}", ael.as_slice());
-            for (i, &idx) in ael.as_slice().iter().enumerate() {
-                eprintln!(
-                    "DEBUG:   [{}] bound {} at x={:.2} poly_type={:?}",
-                    i, idx, bounds[idx].current_x, bounds[idx].poly_type
-                );
-            }
-        }
+        // Log local minimum insertion
+        let bot = bounds[left_idx].current_edge().bot;
+        let poly_type_str = match bounds[left_idx].poly_type {
+            crate::config::PolygonType::Subject => "Subject",
+            crate::config::PolygonType::Clip => "Clip",
+        };
+        crate::debug::log_local_min(
+            bot.y.to_f64().unwrap_or(0.0),
+            left_idx,
+            right_idx,
+            poly_type_str,
+        );
+        crate::debug::log_winding(left_idx, left_wc, left_wc2, 0);
 
         // Check if this local minimum contributes to output
         // From C++: if (is_contributing(left_bound, cliptype, subject_fill_type, clip_fill_type))
@@ -416,26 +402,13 @@ pub fn insert_horizontal_local_minima_into_abl<T: CoordNum + ToPrimitive>(
         bounds[right_idx].winding_count = left_wc;
         bounds[right_idx].winding_count2 = left_wc2;
 
-        // DEBUG: Trace horizontal local minimum insertion
-        if std::env::var("WAGYU_DEBUG").is_ok() {
-            let bot = bounds[left_idx].current_edge().bot;
-            let poly_type = bounds[left_idx].poly_type;
-            let contributing = winding::is_contributing(
-                &bounds[left_idx],
-                cliptype,
-                subject_fill_type,
-                clip_fill_type,
-            );
-            eprintln!(
-                "DEBUG: Horizontal LM at ({},{}) poly_type={:?} wc={} wc2={} contributing={}",
-                bot.x.to_f64().unwrap_or(0.0),
-                bot.y.to_f64().unwrap_or(0.0),
-                poly_type,
-                left_wc,
-                left_wc2,
-                contributing
-            );
-        }
+        // Log horizontal local minimum insertion
+        let bot = bounds[left_idx].current_edge().bot;
+        crate::debug::log_horizontal(
+            left_idx,
+            bot.x.to_f64().unwrap_or(0.0),
+            bounds[right_idx].current_edge().bot.x.to_f64().unwrap_or(0.0),
+        );
 
         // Check if this local minimum contributes to output
         if winding::is_contributing(

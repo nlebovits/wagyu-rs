@@ -579,15 +579,10 @@ pub fn add_first_point<T: CoordNum + Copy>(
     // Track the last point added to this bound
     bounds[bound_idx].last_point = pt.into();
 
-    if std::env::var("WAGYU_DEBUG").is_ok() {
-        eprintln!(
-            "DEBUG: add_first_point created ring {} with point ({}, {}) parent={:?}",
-            ring_idx,
-            pt.x.to_f64().unwrap_or(0.0),
-            pt.y.to_f64().unwrap_or(0.0),
-            parent_ring
-        );
-    }
+    crate::debug::log_ring_new(
+        ring_idx,
+        (pt.x.to_f64().unwrap_or(0.0), pt.y.to_f64().unwrap_or(0.0)),
+    );
 
     ring_idx
 }
@@ -625,17 +620,11 @@ pub fn add_point_to_ring<T: CoordNum + Copy>(
     let side = bounds[bound_idx].side;
     let to_front = side == EdgeSide::Left;
 
-    if std::env::var("WAGYU_DEBUG").is_ok() {
-        eprintln!(
-            "DEBUG: add_point_to_ring bound {} side={:?} to_front={} ring {} pt=({}, {})",
-            bound_idx,
-            side,
-            to_front,
-            ring_idx,
-            pt.x.to_f64().unwrap_or(0.0),
-            pt.y.to_f64().unwrap_or(0.0)
-        );
-    }
+    crate::debug::log_ring_point(
+        ring_idx,
+        (pt.x.to_f64().unwrap_or(0.0), pt.y.to_f64().unwrap_or(0.0)),
+        to_front,
+    );
 
     if let Some(ring) = rings.get_mut(ring_idx) {
         // Check for duplicate at the insertion position

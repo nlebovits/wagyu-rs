@@ -158,15 +158,7 @@ pub fn get_current_x<T: CoordNum>(edge: &Edge<T>, y: T) -> f64 {
 fn intersection_compare<T: CoordNum + ToPrimitive>(b1: &Bound<T>, b2: &Bound<T>) -> bool {
     // Returns true if NOT (b1.current_x > b2.current_x AND slopes not equal)
     // i.e., returns false if b1.current_x > b2.current_x and edges aren't parallel
-    let result =
-        b1.current_x <= b2.current_x || slopes_equal_edges(b1.current_edge(), b2.current_edge());
-    if std::env::var("WAGYU_DEBUG").is_ok() && !result {
-        eprintln!(
-            "DEBUG: intersection_compare FALSE: b1.x={:.2} > b2.x={:.2} and slopes differ",
-            b1.current_x, b2.current_x
-        );
-    }
-    result
+    b1.current_x <= b2.current_x || slopes_equal_edges(b1.current_edge(), b2.current_edge())
 }
 
 /// Check if two edges have equal slopes.
@@ -222,24 +214,15 @@ pub fn build_intersect_list<T>(
                 // Bounds crossed - record intersection
                 if let Some(pt) = get_edge_intersection(b1.current_edge(), b2.current_edge()) {
                     let rounded: Point<T> = round_point(pt);
-                    if std::env::var("WAGYU_DEBUG").is_ok() {
-                        eprintln!(
-                            "DEBUG: Found intersection at ({:?}, {:?}) between bounds {} and {}",
-                            rounded.x.to_f64(),
-                            rounded.y.to_f64(),
-                            idx1,
-                            idx2
-                        );
-                    }
-                    intersects.push(IntersectNode::new(rounded, idx1, idx2));
-                } else if std::env::var("WAGYU_DEBUG").is_ok() {
-                    eprintln!(
-                        "DEBUG: Bounds {} and {} out of order (b1.x={:.2} > b2.x={:.2}) but no intersection found",
+                    crate::debug::log_intersect(
                         idx1,
                         idx2,
-                        b1.current_x,
-                        b2.current_x
+                        (
+                            rounded.x.to_f64().unwrap_or(0.0),
+                            rounded.y.to_f64().unwrap_or(0.0),
+                        ),
                     );
+                    intersects.push(IntersectNode::new(rounded, idx1, idx2));
                 }
                 // Swap in simulated order (not in actual AEL)
                 simulated_order.swap(i, i + 1);
@@ -253,19 +236,9 @@ pub fn build_intersect_list<T>(
 ///
 /// From C++: `update_current_x(active_bounds, top_y)`
 pub fn update_current_x<T: CoordNum>(ael: &ActiveEdgeList, bounds: &mut [Bound<T>], top_y: T) {
-    if std::env::var("WAGYU_DEBUG").is_ok() {
-        eprintln!("DEBUG: update_current_x at y={:?}", top_y.to_f64());
-    }
     for &idx in ael.iter() {
         if let Some(bound) = bounds.get_mut(idx) {
-            let old_x = bound.current_x;
             bound.current_x = get_current_x(bound.current_edge(), top_y);
-            if std::env::var("WAGYU_DEBUG").is_ok() {
-                eprintln!(
-                    "DEBUG:   bound {} x: {:.2} -> {:.2}",
-                    idx, old_x, bound.current_x
-                );
-            }
         }
     }
 }
@@ -649,15 +622,6 @@ pub fn intersect_bounds<T: CoordNum>(
     let b1_contributing = b1.ring.is_some();
     let b2_contributing = b2.ring.is_some();
 
-    let debug = std::env::var("WAGYU_DEBUG").is_ok();
-    if debug {
-        eprintln!(
-            "DEBUG intersect_bounds: b1.ring={:?} b2.ring={:?} b1.poly={:?} b2.poly={:?} b1_wc={} b2_wc={} pt=({:?},{:?})",
-            b1.ring, b2.ring, b1.poly_type, b2.poly_type, b1_wc, b2_wc,
-            pt.x.to_f64(), pt.y.to_f64()
-        );
-    }
-
     // Handle intersection based on contribution status
     // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp lines 192-201
     if b1_contributing && b2_contributing {
@@ -673,21 +637,10 @@ pub fn intersect_bounds<T: CoordNum>(
 
         if unusual_winding || different_poly_types_not_xor {
             // Add local maximum point - rings meet and close/merge
-            if debug {
-                eprintln!(
-                    "DEBUG intersect_bounds: MERGING rings - unusual_winding={} diff_poly_not_xor={}",
-                    unusual_winding, different_poly_types_not_xor
-                );
-            }
             if let Some((keep, remove, side)) =
                 add_local_maximum_point_at_intersection(b1, b2, pt, manager)
             {
-                if debug {
-                    eprintln!(
-                        "DEBUG intersect_bounds: merged - keep={} remove={} side={:?}",
-                        keep, remove, side
-                    );
-                }
+                crate::debug::log_ring_merge(remove, keep);
                 return IntersectResult::Merged(keep, remove, side);
             }
             return IntersectResult::None;

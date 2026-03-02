@@ -772,14 +772,6 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
     // 4. Promote intermediate vertices
     // PORT FROM: C++ lines 112-119
     // This is the critical step that adds polygon vertices to rings!
-    let debug = std::env::var("WAGYU_DEBUG").is_ok();
-    if debug {
-        eprintln!(
-            "DEBUG: step4 start - AEL len={} scanline_y={:?}",
-            ael.len(),
-            scanline_y.to_f64()
-        );
-    }
     for i in 0..ael.len() {
         let bound_idx = match ael.get(i) {
             Some(idx) => idx,
@@ -791,36 +783,11 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
             None => continue,
         };
 
-        let edge_top_y = bound.current_edge().top.y;
-        let has_more_edges = bound.current_edge_index + 1 < bound.edges.len();
-        let is_at_top = edge_top_y == scanline_y;
-
-        if debug {
-            eprintln!(
-                "DEBUG: step4 bound {} edge_top_y={:?} scanline_y={:?} has_more_edges={} is_at_top={} ring={:?}",
-                bound_idx,
-                edge_top_y.to_f64(),
-                scanline_y.to_f64(),
-                has_more_edges,
-                is_at_top,
-                bound.ring
-            );
-        }
-
         if is_intermediate(bound, scanline_y) {
             // Add the edge top point to the ring BEFORE advancing to the next edge
             // This is the vertex that connects the current edge to the next edge
             if bound.ring.is_some() {
                 let edge_top = bound.current_edge().top;
-                if debug {
-                    eprintln!(
-                        "DEBUG: Adding intermediate vertex ({}, {}) to bound {} ring {:?}",
-                        edge_top.x.to_f64().unwrap_or(0.0),
-                        edge_top.y.to_f64().unwrap_or(0.0),
-                        bound_idx,
-                        bound.ring
-                    );
-                }
                 ring_util::add_point_to_ring(
                     bound_idx,
                     bounds,

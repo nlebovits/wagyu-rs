@@ -123,35 +123,10 @@ pub fn execute_vatti<T>(
 
     // Main sweep loop
     // From C++: while (pop_from_scanbeam(scanline_y, scanbeam) || current_lm != minima_sorted.end())
-    let debug = std::env::var("WAGYU_DEBUG").is_ok();
-    if debug {
-        eprintln!(
-            "DEBUG: execute_vatti start - {} local minima",
-            minima_list.len()
-        );
-        for (i, lm) in minima_list.iter().enumerate() {
-            eprintln!(
-                "DEBUG:   LM[{}]: y={:?} poly_type={:?}",
-                i,
-                lm.y.to_f64(),
-                lm.left_bound.poly_type
-            );
-        }
-        eprintln!(
-            "DEBUG: scanbeam has {} entries: {:?}",
-            scanbeam.len(),
-            scanbeam.values_for_debug()
-        );
-    }
+    crate::debug::log_vatti_start(minima_list.len(), scanbeam.len());
+
     while pop_from_scanbeam(&mut scanline_y, &mut scanbeam) || current_lm_idx < minima_list.len() {
-        if debug {
-            eprintln!(
-                "DEBUG: Vatti loop - scanline_y={:?} current_lm_idx={} remaining_scanbeam={}",
-                scanline_y.to_f64(),
-                current_lm_idx,
-                scanbeam.len()
-            );
-        }
+        crate::debug::log_scanbeam(scanline_y.to_f64().unwrap_or(0.0));
         // From C++: process_intersections(scanline_y, active_bounds, cliptype, subject_fill_type, clip_fill_type, manager);
         process_intersections(
             scanline_y,
@@ -200,6 +175,8 @@ pub fn execute_vatti<T>(
             clip_fill_type,
         );
     }
+
+    crate::debug::log_vatti_end(manager.len());
 }
 
 #[cfg(test)]

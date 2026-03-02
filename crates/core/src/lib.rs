@@ -27,6 +27,7 @@ pub mod build_edges;
 pub mod build_local_minima_list;
 pub mod build_result;
 pub mod config;
+pub mod debug;
 pub mod error;
 pub mod interrupt;
 pub mod intersect;

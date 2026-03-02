@@ -4,7 +4,7 @@
  * This tool reads a JSON file containing subject and clip polygons,
  * runs the specified boolean operation, and outputs the result as JSON.
  *
- * Usage: wagyu-oracle <input.json> <operation> [fill_type]
+ * Usage: wagyu-oracle <input.json> <operation> [fill_type] [--debug]
  *
  * Input format:
  * {
@@ -14,6 +14,9 @@
  *
  * Operations: union, intersection, difference, xor
  * Fill types: evenodd (default), nonzero, positive, negative
+ *
+ * Debug mode: --debug outputs structured logging to stderr in the same
+ * format as the Rust implementation for diffing.
  *
  * Build: See build_oracle.sh
  */
@@ -36,11 +39,47 @@ using namespace rapidjson;
 using namespace mapbox::geometry::wagyu;
 using T = std::int64_t;
 
+// Global debug flag
+bool g_debug = false;
+
+// Debug logging functions (match Rust format)
+void log_vatti_start(size_t minima, size_t scanbeam) {
+    if (g_debug) {
+        std::cerr << "[VATTI_START] minima=" << minima << " scanbeam=" << scanbeam << std::endl;
+    }
+}
+
+void log_vatti_end(size_t rings) {
+    if (g_debug) {
+        std::cerr << "[VATTI_END] rings=" << rings << std::endl;
+    }
+}
+
+void log_input_polygon(const char* type, size_t poly_idx, size_t ring_count, size_t point_count) {
+    if (g_debug) {
+        std::cerr << "[INPUT] type=" << type << " poly=" << poly_idx
+                  << " rings=" << ring_count << " points=" << point_count << std::endl;
+    }
+}
+
+void log_output_polygon(size_t poly_idx, size_t ring_count) {
+    if (g_debug) {
+        std::cerr << "[OUTPUT] poly=" << poly_idx << " rings=" << ring_count << std::endl;
+    }
+}
+
+void log_ring_points(size_t ring_idx, size_t point_count) {
+    if (g_debug) {
+        std::cerr << "[RING_CLOSE] id=" << ring_idx << " points=" << point_count << std::endl;
+    }
+}
+
 void print_usage(const char* program) {
-    std::cerr << "Usage: " << program << " <input.json> <operation> [fill_type]" << std::endl;
+    std::cerr << "Usage: " << program << " <input.json> <operation> [fill_type] [--debug]" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Operations: union, intersection, difference, xor" << std::endl;
     std::cerr << "Fill types: evenodd (default), nonzero, positive, negative" << std::endl;
+    std::cerr << "Flags: --debug outputs structured logging to stderr" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Input JSON format:" << std::endl;
     std::cerr << "  {" << std::endl;
@@ -134,8 +173,13 @@ int main(int argc, char* argv[]) {
     clip_type operation = parse_operation(argv[2]);
     fill_type fill = fill_type_even_odd;
 
-    if (argc > 3) {
-        fill = parse_fill_type(argv[3]);
+    // Parse optional arguments
+    for (int i = 3; i < argc; ++i) {
+        if (strcmp(argv[i], "--debug") == 0) {
+            g_debug = true;
+        } else {
+            fill = parse_fill_type(argv[i]);
+        }
     }
 
     // Read input file
@@ -171,6 +215,22 @@ int main(int argc, char* argv[]) {
         clip_polys = parse_multi_polygon(doc["clip"]);
     }
 
+    // Log input polygons
+    for (size_t i = 0; i < subject_polys.size(); ++i) {
+        size_t point_count = 0;
+        for (const auto& ring : subject_polys[i]) {
+            point_count += ring.size();
+        }
+        log_input_polygon("Subject", i, subject_polys[i].size(), point_count);
+    }
+    for (size_t i = 0; i < clip_polys.size(); ++i) {
+        size_t point_count = 0;
+        for (const auto& ring : clip_polys[i]) {
+            point_count += ring.size();
+        }
+        log_input_polygon("Clip", i, clip_polys[i].size(), point_count);
+    }
+
     // Run wagyu
     wagyu<T> clipper;
 
@@ -182,8 +242,21 @@ int main(int argc, char* argv[]) {
         clipper.add_polygon(poly, polygon_type_clip);
     }
 
+    // Log algorithm start
+    log_vatti_start(subject_polys.size() + clip_polys.size(), 0);
+
     mapbox::geometry::multi_polygon<T> solution;
     clipper.execute(operation, solution, fill, fill);
+
+    // Log algorithm end and output rings
+    size_t ring_idx = 0;
+    for (size_t i = 0; i < solution.size(); ++i) {
+        log_output_polygon(i, solution[i].size());
+        for (const auto& ring : solution[i]) {
+            log_ring_points(ring_idx++, ring.size());
+        }
+    }
+    log_vatti_end(ring_idx);
 
     // Output result
     output_result(solution);
