@@ -490,31 +490,11 @@ pub fn build_result<T: CoordNum + Copy>(
     manager: &RingManager<T>,
     reverse_output: bool,
 ) -> MultiPolygon<T> {
-    // DEBUG: Print ring state
-    if std::env::var("WAGYU_DEBUG").is_ok() {
-        eprintln!("DEBUG: build_result - {} rings total", manager.len());
-        for i in 0..manager.len() {
-            if let Some(ring) = manager.get(i) {
-                eprintln!(
-                    "DEBUG:   Ring {}: {} points, parent={:?}, is_hole={}",
-                    i,
-                    ring.points().len(),
-                    ring.parent(),
-                    ring.is_hole()
-                );
-                if !ring.points().is_empty() {
-                    for (j, pt) in ring.points().iter().take(5).enumerate() {
-                        eprintln!(
-                            "DEBUG:     pt {}: ({}, {})",
-                            j,
-                            num_traits::ToPrimitive::to_f64(&pt.x).unwrap_or(0.0),
-                            num_traits::ToPrimitive::to_f64(&pt.y).unwrap_or(0.0)
-                        );
-                    }
-                }
-            }
+    // Log ring close for each completed ring
+    for i in 0..manager.len() {
+        if let Some(ring) = manager.get(i) {
+            crate::debug::log_ring_close(i, ring.points().len());
         }
-        eprintln!("DEBUG: top_level_rings: {:?}", manager.top_level_rings());
     }
 
     let mut polygons = Vec::new();

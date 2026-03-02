@@ -301,36 +301,6 @@ pub fn add_ring_to_local_minima_list<T: CoordNum>(
         // After fixing build_edges.rs to match C++ convention, bot.y is now the larger Y.
         let min_y = to_minimum[0].bot.y;
 
-        // Debug output for edge counts
-        if std::env::var("WAGYU_DEBUG").is_ok() {
-            eprintln!(
-                "DEBUG: Building bounds - to_minimum has {} edges, to_maximum has {} edges at min_y={:?}",
-                to_minimum.len(),
-                to_maximum.len(),
-                min_y.to_f64()
-            );
-            for (i, edge) in to_minimum.iter().enumerate() {
-                eprintln!(
-                    "DEBUG:   to_minimum[{}]: bot=({:?},{:?}) top=({:?},{:?})",
-                    i,
-                    edge.bot.x.to_f64(),
-                    edge.bot.y.to_f64(),
-                    edge.top.x.to_f64(),
-                    edge.top.y.to_f64()
-                );
-            }
-            for (i, edge) in to_maximum.iter().enumerate() {
-                eprintln!(
-                    "DEBUG:   to_maximum[{}]: bot=({:?},{:?}) top=({:?},{:?})",
-                    i,
-                    edge.bot.x.to_f64(),
-                    edge.bot.y.to_f64(),
-                    edge.top.x.to_f64(),
-                    edge.top.y.to_f64()
-                );
-            }
-        }
-
         // Create bounds and local minimum
         // PORT FROM: wagyu/include/mapbox/geometry/wagyu/local_minimum_util.hpp lines 262-276
         // winding_delta is an INVARIANT property based on bound direction:
