@@ -1,0 +1,17 @@
+{
+  "_comment": "Issue #25: XOR winding count produces wrong output",
+  "_description": "Two overlapping triangles - XOR should produce butterfly shape",
+  "_bug": "XOR is_contributing logic incorrectly determines which edges contribute",
+  "_operation": "xor",
+  "_fill": "evenodd",
+  "subject": [
+    [
+      [[0, 0], [10, 0], [5, 10], [0, 0]]
+    ]
+  ],
+  "clip": [
+    [
+      [[3, 0], [13, 0], [8, 10], [3, 0]]
+    ]
+  ]
+}
