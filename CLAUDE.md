@@ -43,20 +43,33 @@ Output must be valid per OGC: no self-intersections, correct ring orientations, 
 
 ## Tools
 
-### Oracle Harness
+### Oracle Harness (Working Setup)
 
-Compare Rust output against C++ oracle (PR #41):
+The oracle harness compares Rust output against the C++ reference implementation.
 
+**Prerequisites:**
+- C++ wagyu cloned at `../wagyu` (sibling directory)
+- CMake and C++ compiler installed
+
+**Build:**
 ```bash
-# Build C++ oracle
+cd ../wagyu && mkdir -p build && cd build && cmake .. && make
 cd tools/oracle && ./build_oracle.sh
-
-# Compare single test
-./compare.sh tests/fixtures/polygon.json xor even_odd
-
-# Compare all failing tests
-./compare_all.sh
 ```
+
+**Usage:**
+```bash
+# Compare single test case
+./tools/oracle/compare.sh tools/oracle/test_inputs/minimal/test.json union evenodd
+
+# With debug output (shows ring operations)
+./tools/oracle/compare.sh test.json union evenodd --debug
+
+# Compare against golden test fixtures
+./tools/oracle/compare.sh crates/core/tests/fixtures/polygon.json xor even_odd
+```
+
+**Minimal test cases:** `tools/oracle/test_inputs/minimal/` contains small reproducible cases for debugging specific issues.
 
 ### Debug Logging
 
@@ -64,6 +77,13 @@ Enable with `WAGYU_DEBUG=1`:
 ```bash
 WAGYU_DEBUG=1 cargo test test_name -- --nocapture
 ```
+
+Debug output includes:
+- `[RING_NEW]` - Ring creation with initial point
+- `[RING_POINT]` - Point added to ring (front/back)
+- `[RING_MERGE]` - Ring merge operations
+- `[RING_CLOSE]` - Final ring point counts
+- `[TOPOLOGY]` - Topology correction steps
 
 ## Debugging Patterns
 
@@ -87,9 +107,16 @@ Loop guards exist in `vatti.rs` and `intersect_util.rs` (panic after 100k iterat
 
 ### Known Bug Areas
 
-- `merge_rings_at_intersection`: Must SPLIT rings, not concatenate (#37 tracks `i_list` chain handling)
+- `merge_rings_at_intersection` (Vatti): Merged rings tracked via `RingManager.mark_as_merged()`. NOTE: Junction point deduplication was attempted but reverted - duplicate points are needed for `correct_self_intersections` to properly split corner-touching polygons.
+- `correct_collinear_edges` (Topology): Corrupts rings when merged rings have stale points - fix blocked on `clear_merged_rings()` bug
 - `correct_ring_self_intersections`: Return `true` for visited rings, not just when splits occur
 - Parent/child ring assignment after topology operations
+
+### Merged Ring Tracking
+
+Infrastructure exists in `RingManager` to track and clear merged rings:
+- `mark_as_merged(ring_idx)` - Called during Vatti merge
+- `clear_merged_rings()` - Should be called at topology correction start (currently disabled, see TODO in `correct_topology`)
 
 ## Current Status
 

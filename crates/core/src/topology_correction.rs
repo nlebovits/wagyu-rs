@@ -2142,6 +2142,16 @@ pub fn correct_topology<T: CoordNum + Copy>(manager: &mut crate::build_result::R
         );
     }
 
+    // Clear points from rings that were merged during Vatti sweep.
+    // This prevents collinear edge correction from incorrectly modifying
+    // the kept rings based on stale points in merged rings.
+    //
+    // TODO(#51): Enable this once the Ring 3 creation bug is fixed.
+    // Currently, calling clear_merged_rings() exposes a bug where Ring 3 is
+    // created with Ring 1's initial point instead of the correct point.
+    // See: https://github.com/nlebovits/wagyu-rs/issues/51
+    // manager.clear_merged_rings();
+
     // Step 1: Correct orientations
     // Ensures exterior rings are CCW (positive area) and holes are CW (negative area)
     // PORT FROM: C++ correct_topology line 1329
@@ -2732,23 +2742,19 @@ fn find_intersect_loop<T: CoordNum + Copy>(
     false
 }
 
-/// Split two touching rings at their shared point into two separate fragments.
+/// Split touching rings at their shared points into two separate fragments.
 ///
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
-///            `process_single_intersection` (lines 588-734) - the next-swap portion
+///            `process_single_intersection` (lines 588-734)
 ///
-/// CRITICAL: C++ performs a "next-swap" which SPLITS the two rings into two
-/// fragments. This is NOT a merge/concatenation!
+/// This function handles both simple two-ring merges and chained multi-ring merges.
 ///
-/// Given two rings sharing a point:
-/// - Ring A: [a0, a1, a2, shared, a4, a5]  (shared at index 3)
-/// - Ring B: [b0, b1, b2, shared, b4, b5]  (shared at index 3)
-///
-/// The next-swap produces:
-/// - Fragment 1: [shared, b4, b5, b0, b1, b2] (shared -> through B -> back)
-/// - Fragment 2: [shared, a4, a5, a0, a1, a2] (shared -> through A -> back)
-///
-/// Fragment 1 goes to ring_origin, Fragment 2 goes to a NEW ring.
+/// ALGORITHM (matching C++ linked-list semantics):
+/// 1. Build a unified point pool containing all points from all involved rings
+/// 2. Create a "next index" map representing the linked-list structure
+/// 3. Apply all swap operations (primary + chain) to this map
+/// 4. Traverse from each origin to build exactly 2 fragments
+/// 5. Assign fragments to rings, clear absorbed rings
 fn merge_rings_at_intersection<T: CoordNum + Copy>(
     manager: &mut crate::build_result::RingManager<T>,
     _connection_map: &mut ConnectionMap,
@@ -2759,87 +2765,203 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
     op_origin_2: (usize, usize),
     i_list: &VecDeque<(usize, PointPtrPair)>,
 ) {
-    // PORT FROM: C++ lines 605-686
-    //
-    // C++ next-swap on linked list:
-    //   op_origin_1->next = op_origin_2->next
-    //   op_origin_2->next = op_origin_1->next
-    //
-    // This creates TWO separate traversal paths (fragments), not one merged ring.
+    let (ring_a_idx, point_a_idx) = op_origin_1;
+    let (ring_b_idx, point_b_idx) = op_origin_2;
 
-    let (ring_a_idx, shared_idx_a) = op_origin_1;
-    let (ring_b_idx, shared_idx_b) = op_origin_2;
+    // Collect all rings involved in this merge (primary + chain)
+    let mut involved_rings: Vec<usize> = vec![ring_a_idx, ring_b_idx];
+    for (_chain_ring_idx, pair) in i_list.iter() {
+        if !involved_rings.contains(&pair.ring1_idx) {
+            involved_rings.push(pair.ring1_idx);
+        }
+        if !involved_rings.contains(&pair.ring2_idx) {
+            involved_rings.push(pair.ring2_idx);
+        }
+    }
 
-    // Skip if either ring is invalid
-    let points_a: Vec<Coord<T>> = match manager.get(ring_a_idx) {
-        Some(r) => r.points().to_vec(),
-        None => return,
-    };
-    let points_b: Vec<Coord<T>> = match manager.get(ring_b_idx) {
-        Some(r) => r.points().to_vec(),
-        None => return,
-    };
+    // Build unified point pool and next-index map
+    // Each entry: (coord, next_pool_index)
+    // We also track which pool index corresponds to each (ring_idx, point_idx)
+    let mut pool: Vec<Coord<T>> = Vec::new();
+    let mut next_map: Vec<usize> = Vec::new();
+    let mut ring_point_to_pool: std::collections::HashMap<(usize, usize), usize> =
+        std::collections::HashMap::new();
 
-    if points_a.len() < 3 || points_b.len() < 3 {
+    for &ring_idx in &involved_rings {
+        let points = match manager.get(ring_idx) {
+            Some(r) => r.points().to_vec(),
+            None => continue,
+        };
+        if points.len() < 3 {
+            continue;
+        }
+
+        let base_idx = pool.len();
+        for (i, &coord) in points.iter().enumerate() {
+            let pool_idx = pool.len();
+            pool.push(coord);
+            // Next index wraps around within this ring
+            let next_idx = base_idx + (i + 1) % points.len();
+            next_map.push(next_idx);
+            ring_point_to_pool.insert((ring_idx, i), pool_idx);
+        }
+    }
+
+    if pool.len() < 6 {
+        // Need at least 3 points per ring for 2 rings
         return;
     }
 
-    let shared_coord = points_a[shared_idx_a];
-    let len_a = points_a.len();
-    let len_b = points_b.len();
+    // Helper to get pool index for (ring_idx, point_idx)
+    let get_pool_idx = |ring_idx: usize, point_idx: usize| -> Option<usize> {
+        ring_point_to_pool.get(&(ring_idx, point_idx)).copied()
+    };
 
-    // Fragment 1: Start at shared, traverse through ring B, end at shared
-    // [shared] + B[(shared_b+1)..] + B[..shared_b]
-    let mut fragment_1: Vec<Coord<T>> = Vec::with_capacity(len_b);
-    fragment_1.push(shared_coord);
-    for offset in 1..len_b {
-        let idx = (shared_idx_b + offset) % len_b;
-        fragment_1.push(points_b[idx]);
+    // Apply primary swap: op_origin_1 <-> op_origin_2
+    // C++: op_origin_1->next = op_origin_2->next
+    //      op_origin_2->next = op_origin_1->next
+    let Some(pool_idx_1) = get_pool_idx(ring_a_idx, point_a_idx) else {
+        return;
+    };
+    let Some(pool_idx_2) = get_pool_idx(ring_b_idx, point_b_idx) else {
+        return;
+    };
+
+    let next_1 = next_map[pool_idx_1];
+    let next_2 = next_map[pool_idx_2];
+    next_map[pool_idx_1] = next_2;
+    next_map[pool_idx_2] = next_1;
+
+    // Apply chain swaps
+    for (_chain_ring_idx, pair) in i_list.iter() {
+        let Some(pool_idx_s1) = get_pool_idx(pair.ring1_idx, pair.point1_idx) else {
+            continue;
+        };
+        let Some(pool_idx_s2) = get_pool_idx(pair.ring2_idx, pair.point2_idx) else {
+            continue;
+        };
+
+        let next_s1 = next_map[pool_idx_s1];
+        let next_s2 = next_map[pool_idx_s2];
+        next_map[pool_idx_s1] = next_s2;
+        next_map[pool_idx_s2] = next_s1;
     }
 
-    // Fragment 2: Start at shared, traverse through ring A, end at shared
-    // [shared] + A[(shared_a+1)..] + A[..shared_a]
-    let mut fragment_2: Vec<Coord<T>> = Vec::with_capacity(len_a);
-    fragment_2.push(shared_coord);
-    for offset in 1..len_a {
-        let idx = (shared_idx_a + offset) % len_a;
-        fragment_2.push(points_a[idx]);
+    // Traverse from pool_idx_1 to build fragment 1
+    let mut fragment_1: Vec<Coord<T>> = Vec::new();
+    let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut current = pool_idx_1;
+    while !visited.contains(&current) {
+        visited.insert(current);
+        fragment_1.push(pool[current]);
+        current = next_map[current];
+        if fragment_1.len() > pool.len() {
+            // Safety: prevent infinite loop
+            break;
+        }
     }
 
-    // Assign Fragment 1 to ring_origin (ring_a)
+    // Traverse from pool_idx_2 to build fragment 2
+    let mut fragment_2: Vec<Coord<T>> = Vec::new();
+    visited.clear();
+    current = pool_idx_2;
+    while !visited.contains(&current) {
+        visited.insert(current);
+        fragment_2.push(pool[current]);
+        current = next_map[current];
+        if fragment_2.len() > pool.len() {
+            // Safety: prevent infinite loop
+            break;
+        }
+    }
+
+    if fragment_1.len() < 3 || fragment_2.len() < 3 {
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[TOPOLOGY] merge_rings_at_intersection: fragments too small ({}, {}), skipping",
+                fragment_1.len(),
+                fragment_2.len()
+            );
+        }
+        return;
+    }
+
+    // PORT FROM: C++ lines 633-645 - area-based fragment assignment
+    // Calculate areas to determine which fragment goes to ring_origin vs ring_new
+    let area_1 = crate::ring_util::ring_area(&fragment_1);
+    let area_2 = crate::ring_util::ring_area(&fragment_2);
+    let origin_is_hole = manager.ring_is_hole(ring_a_idx);
+
+    // C++ logic: if origin is a hole AND area_1 is negative (CW/hole orientation),
+    // assign fragment_1 to ring_origin. Otherwise, swap them.
+    let (origin_fragment, new_fragment) = if origin_is_hole && area_1 < 0.0 {
+        (fragment_1.clone(), fragment_2.clone())
+    } else {
+        (fragment_2.clone(), fragment_1.clone())
+    };
+
+    if crate::debug::debug_enabled() {
+        eprintln!(
+            "[TOPOLOGY] merge_rings_at_intersection: area_1={:.2}, area_2={:.2}, origin_is_hole={}, swapped={}",
+            area_1, area_2, origin_is_hole, !(origin_is_hole && area_1 < 0.0)
+        );
+    }
+
+    // Assign origin_fragment to ring_a
     if let Some(ring) = manager.get_mut(ring_a_idx) {
-        *ring.points_mut() = fragment_1;
-        ring.set_corrected(false); // Mark as needing reprocessing
-    }
-
-    // Create a NEW ring for Fragment 2 (matching C++ behavior)
-    let new_ring_idx = manager.create_new_ring();
-    if let Some(ring) = manager.get_mut(new_ring_idx) {
-        *ring.points_mut() = fragment_2;
+        *ring.points_mut() = origin_fragment;
         ring.set_corrected(false);
     }
 
-    // Clear ring B (it's been split into the two fragments)
-    if let Some(ring) = manager.get_mut(ring_b_idx) {
-        ring.points_mut().clear();
+    // Create new ring for new_fragment
+    let new_ring_idx = manager.create_new_ring();
+    if let Some(ring) = manager.get_mut(new_ring_idx) {
+        *ring.points_mut() = new_fragment;
+        ring.set_corrected(false);
+    }
+
+    // Clear all other involved rings (they've been absorbed)
+    for &ring_idx in &involved_rings {
+        if ring_idx != ring_a_idx {
+            if let Some(ring) = manager.get_mut(ring_idx) {
+                ring.points_mut().clear();
+            }
+        }
+    }
+
+    // PORT FROM: C++ lines 661-686 - assign parent/child relationships for new ring
+    // If ring_origin (ring_a) is a hole, new ring becomes its child.
+    // If ring_origin is not a hole (exterior), new ring becomes its sibling.
+    // NOTE: We use origin_is_hole calculated BEFORE fragment assignment (matching C++)
+    if origin_is_hole {
+        // New ring is a child of the hole (becomes an island inside the hole)
+        manager.assign_as_child(new_ring_idx, Some(ring_a_idx));
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[TOPOLOGY] merge_rings_at_intersection: new ring {} assigned as child of hole {}",
+                new_ring_idx, ring_a_idx
+            );
+        }
+    } else {
+        // New ring is a sibling (same parent as ring_origin)
+        manager.assign_as_sibling(new_ring_idx, ring_a_idx);
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[TOPOLOGY] merge_rings_at_intersection: new ring {} assigned as sibling of exterior {}",
+                new_ring_idx, ring_a_idx
+            );
+        }
     }
 
     if crate::debug::debug_enabled() {
         eprintln!(
-            "[TOPOLOGY] merge_rings_at_intersection: split rings {} and {} at shared point -> ring {} (frag1, {} pts) + new ring {} (frag2, {} pts)",
-            ring_a_idx, ring_b_idx, ring_a_idx,
-            manager.get(ring_a_idx).map(|r| r.points().len()).unwrap_or(0),
+            "[TOPOLOGY] merge_rings_at_intersection: merged {} rings -> ring {} ({} pts) + new ring {} ({} pts)",
+            involved_rings.len(),
+            ring_a_idx,
+            fragment_1.len(),
             new_ring_idx,
-            manager.get(new_ring_idx).map(|r| r.points().len()).unwrap_or(0)
+            fragment_2.len()
         );
-    }
-
-    // Process additional rings in i_list (for chained merges)
-    // TODO: Handle chained merges for multi-ring chains - C++ does additional
-    // pointer swaps for each entry in iList
-    for (_ring_idx, _pair) in i_list {
-        // Each entry needs the same next-swap treatment
-        // For now, basic two-ring split handles most cases
     }
 }
 

@@ -32,6 +32,9 @@ pub struct RingManager<T: CoordNum> {
     pub hot_pixels: Vec<Point<T>>,
     /// Current index into hot_pixels during sweep
     pub current_hp_idx: usize,
+    /// Ring indices that were merged into other rings during Vatti sweep.
+    /// These rings' points should be cleared before topology correction.
+    merged_rings: Vec<usize>,
 }
 
 impl<T: CoordNum> RingManager<T> {
@@ -42,7 +45,27 @@ impl<T: CoordNum> RingManager<T> {
             top_level_rings: Vec::new(),
             hot_pixels: Vec::new(),
             current_hp_idx: 0,
+            merged_rings: Vec::new(),
         }
+    }
+
+    /// Mark a ring as merged (its points were copied to another ring).
+    /// The ring's points will be cleared before topology correction.
+    pub fn mark_as_merged(&mut self, ring_idx: usize) {
+        if !self.merged_rings.contains(&ring_idx) {
+            self.merged_rings.push(ring_idx);
+        }
+    }
+
+    /// Clear points from all rings that were marked as merged.
+    /// Call this at the start of topology correction.
+    pub fn clear_merged_rings(&mut self) {
+        for &ring_idx in &self.merged_rings.clone() {
+            if let Some(ring) = self.rings.get_mut(ring_idx) {
+                ring.points_mut().clear();
+            }
+        }
+        self.merged_rings.clear();
     }
 
     /// Add a ring to the manager.
@@ -460,6 +483,15 @@ fn build_polygon<T: CoordNum + Copy>(
     let mut holes = Vec::new();
     for &hole_index in exterior_ring.children() {
         if let Some(hole_ring) = manager.get(hole_index) {
+            // Skip empty or degenerate rings (need at least 3 points for a valid hole)
+            if hole_ring.points().len() < 3 {
+                // Still process grandchildren even if this hole is empty
+                for &grandchild_index in hole_ring.children() {
+                    grandchildren.push(grandchild_index);
+                }
+                continue;
+            }
+
             // PORT FROM: C++ build_result.hpp - holes use same reverse_output flag as exterior
             // The ring already has correct CW winding from correct_orientations
             holes.push(ring_to_linestring(hole_ring, reverse_output));
