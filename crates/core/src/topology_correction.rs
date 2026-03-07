@@ -2142,6 +2142,16 @@ pub fn correct_topology<T: CoordNum + Copy>(manager: &mut crate::build_result::R
         );
     }
 
+    // Clear points from rings that were merged during Vatti sweep.
+    // This prevents collinear edge correction from incorrectly modifying
+    // the kept rings based on stale points in merged rings.
+    //
+    // TODO(#51): Enable this once the Ring 3 creation bug is fixed.
+    // Currently, calling clear_merged_rings() exposes a bug where Ring 3 is
+    // created with Ring 1's initial point instead of the correct point.
+    // See: https://github.com/nlebovits/wagyu-rs/issues/51
+    // manager.clear_merged_rings();
+
     // Step 1: Correct orientations
     // Ensures exterior rings are CCW (positive area) and holes are CW (negative area)
     // PORT FROM: C++ correct_topology line 1329
