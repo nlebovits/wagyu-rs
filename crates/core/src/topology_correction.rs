@@ -925,8 +925,18 @@ pub fn find_and_correct_repeated_points<T: CoordNum + Copy>(
 ) -> Vec<usize> {
     let mut new_rings: Vec<usize> = Vec::new();
 
+    const MAX_REPEATED_POINTS_ITERATIONS: usize = 10_000;
+    let mut repeated_points_iteration = 0;
+
     // Iterative outer loop: restart after each split because Vec indices become stale
     loop {
+        repeated_points_iteration += 1;
+        if repeated_points_iteration > MAX_REPEATED_POINTS_ITERATIONS {
+            panic!(
+                "INFINITE LOOP DETECTED in find_and_correct_repeated_points at iteration {}, ring_idx={}",
+                repeated_points_iteration, ring_idx
+            );
+        }
         let points: Vec<Coord<T>> = match manager.get(ring_idx) {
             Some(r) if !r.points().is_empty() => r.points().to_vec(),
             _ => break,
@@ -1298,7 +1308,9 @@ pub fn assign_new_ring_parents<T: CoordNum + Copy>(
 /// Skips rings that have already been corrected (`corrected == true`).
 /// After processing, marks the ring as corrected.
 ///
-/// Returns true if any splits were performed.
+/// Returns true if the ring was processed (not already corrected).
+/// NOTE: This matches C++ semantics where the return value indicates "was visited",
+/// not "did split". This is important for the convergence loop in correct_topology.
 pub fn correct_ring_self_intersections<T: CoordNum + Copy>(
     manager: &mut crate::build_result::RingManager<T>,
     ring_idx: usize,
@@ -1314,12 +1326,25 @@ pub fn correct_ring_self_intersections<T: CoordNum + Copy>(
     let new_rings = find_and_correct_repeated_points(ring_idx, manager);
     let did_split = !new_rings.is_empty();
 
+    if crate::debug::debug_enabled() && did_split {
+        eprintln!(
+            "[TOPOLOGY] Ring {} split into {} new rings: {:?}",
+            ring_idx,
+            new_rings.len(),
+            new_rings
+        );
+    }
+
     if correct_tree {
         assign_new_ring_parents(manager, ring_idx, &new_rings);
     }
 
     manager.set_corrected(ring_idx, true);
-    did_split
+    // Return true for any ring that was processed (not already corrected).
+    // This matches C++ semantics - the while loop in correct_topology needs to
+    // keep iterating as long as any ring was visited, not just when splits occur.
+    // See: topology_correction.hpp lines 453-469
+    true
 }
 
 /// Correct all self-intersecting rings in the manager.
@@ -1335,10 +1360,18 @@ pub fn correct_self_intersections<T: CoordNum + Copy>(
     // Process smallest rings first so inner rings are corrected before their parents
     let sorted = manager.sorted_ring_indices_smallest_to_largest();
     let mut fixed = false;
+    let mut rings_fixed: Vec<usize> = Vec::new();
     for ring_idx in sorted {
         if correct_ring_self_intersections(manager, ring_idx, correct_tree) {
+            rings_fixed.push(ring_idx);
             fixed = true;
         }
+    }
+    if crate::debug::debug_enabled() && fixed {
+        eprintln!(
+            "[TOPOLOGY] correct_self_intersections fixed rings: {:?}",
+            rings_fixed
+        );
     }
     fixed
 }
@@ -2102,31 +2135,72 @@ pub fn correct_collinear_edges<T: CoordNum + Copy>(
 /// 4. Correct tree - rebuild parent/child relationships based on containment
 /// 5. Loop on chained rings and self-intersections (simplified)
 pub fn correct_topology<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManager<T>) {
+    if crate::debug::debug_enabled() {
+        eprintln!(
+            "[TOPOLOGY] Starting correct_topology with {} rings",
+            manager.len()
+        );
+    }
+
     // Step 1: Correct orientations
     // Ensures exterior rings are CCW (positive area) and holes are CW (negative area)
     // PORT FROM: C++ correct_topology line 1329
+    if crate::debug::debug_enabled() {
+        eprintln!("[TOPOLOGY] Step 1: correct_orientations");
+    }
     correct_orientations(manager);
 
     // Step 2: Correct collinear edges (remove spikes and overlapping edges)
     // PORT FROM: C++ correct_topology line 1333
     // This handles degenerate geometry where edges go back along the same path.
+    if crate::debug::debug_enabled() {
+        eprintln!("[TOPOLOGY] Step 2: correct_collinear_edges");
+    }
     correct_collinear_edges(manager);
 
     // Step 3: First pass of self-intersection correction (without tree correction)
     // PORT FROM: C++ correct_topology line 1335
+    if crate::debug::debug_enabled() {
+        eprintln!("[TOPOLOGY] Step 3: correct_self_intersections (first pass)");
+    }
     correct_self_intersections(manager, false);
 
     // Step 4: Rebuild tree structure
     // Rebuilds parent/child relationships based on containment
     // PORT FROM: C++ correct_topology line 1337
+    if crate::debug::debug_enabled() {
+        eprintln!("[TOPOLOGY] Step 4: correct_tree");
+    }
     correct_tree(manager);
 
     // Step 5: Iteratively correct chained rings and self-intersections until stable
     // PORT FROM: C++ correct_topology lines 1339-1343
+    if crate::debug::debug_enabled() {
+        eprintln!("[TOPOLOGY] Step 5: iterative chained/self-intersection loop");
+    }
     let mut fixed = true;
+    const MAX_TOPOLOGY_ITERATIONS: usize = 10_000;
+    let mut topology_iteration = 0;
     while fixed {
+        topology_iteration += 1;
+        if topology_iteration > MAX_TOPOLOGY_ITERATIONS {
+            panic!(
+                "INFINITE LOOP DETECTED in correct_topology at iteration {}",
+                topology_iteration
+            );
+        }
+        if crate::debug::debug_enabled() {
+            eprintln!("[TOPOLOGY] Iteration {}", topology_iteration);
+        }
         correct_chained_rings(manager);
         fixed = correct_self_intersections(manager, true);
+    }
+
+    if crate::debug::debug_enabled() {
+        eprintln!(
+            "[TOPOLOGY] Completed after {} iterations",
+            topology_iteration
+        );
     }
 }
 
@@ -2658,13 +2732,23 @@ fn find_intersect_loop<T: CoordNum + Copy>(
     false
 }
 
-/// Merge rings at their intersection points.
+/// Split two touching rings at their shared point into two separate fragments.
 ///
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
-///            `process_single_intersection` (lines 588-734) - the merge portion
+///            `process_single_intersection` (lines 588-734) - the next-swap portion
 ///
-/// This performs the actual ring merging by splicing the point sequences
-/// together at the shared coordinate.
+/// CRITICAL: C++ performs a "next-swap" which SPLITS the two rings into two
+/// fragments. This is NOT a merge/concatenation!
+///
+/// Given two rings sharing a point:
+/// - Ring A: [a0, a1, a2, shared, a4, a5]  (shared at index 3)
+/// - Ring B: [b0, b1, b2, shared, b4, b5]  (shared at index 3)
+///
+/// The next-swap produces:
+/// - Fragment 1: [shared, b4, b5, b0, b1, b2] (shared -> through B -> back)
+/// - Fragment 2: [shared, a4, a5, a0, a1, a2] (shared -> through A -> back)
+///
+/// Fragment 1 goes to ring_origin, Fragment 2 goes to a NEW ring.
 fn merge_rings_at_intersection<T: CoordNum + Copy>(
     manager: &mut crate::build_result::RingManager<T>,
     _connection_map: &mut ConnectionMap,
@@ -2675,93 +2759,87 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
     op_origin_2: (usize, usize),
     i_list: &VecDeque<(usize, PointPtrPair)>,
 ) {
-    // PORT FROM: C++ lines 588-734
+    // PORT FROM: C++ lines 605-686
     //
-    // In C++, this performs a "next-swap" on the linked list pointers:
+    // C++ next-swap on linked list:
     //   op_origin_1->next = op_origin_2->next
     //   op_origin_2->next = op_origin_1->next
     //
-    // For Vec-based rings in Rust, we need to splice the point arrays together.
-    // This creates a merged ring from the two touching rings.
+    // This creates TWO separate traversal paths (fragments), not one merged ring.
 
-    // For now, implement a simplified version that handles the basic case:
-    // Two rings sharing a point are merged into one ring.
-
-    // Get the points from both rings
-    let (ring_origin_idx, origin_point_idx) = op_origin_1;
-    let (ring_other_idx, other_point_idx) = op_origin_2;
+    let (ring_a_idx, shared_idx_a) = op_origin_1;
+    let (ring_b_idx, shared_idx_b) = op_origin_2;
 
     // Skip if either ring is invalid
-    let origin_points: Vec<Coord<T>> = match manager.get(ring_origin_idx) {
+    let points_a: Vec<Coord<T>> = match manager.get(ring_a_idx) {
         Some(r) => r.points().to_vec(),
         None => return,
     };
-    let other_points: Vec<Coord<T>> = match manager.get(ring_other_idx) {
+    let points_b: Vec<Coord<T>> = match manager.get(ring_b_idx) {
         Some(r) => r.points().to_vec(),
         None => return,
     };
 
-    if origin_points.len() < 3 || other_points.len() < 3 {
+    if points_a.len() < 3 || points_b.len() < 3 {
         return;
     }
 
-    // Build merged ring by splicing at the shared point
-    // Starting from origin ring, at the shared point, continue into other ring,
-    // then back to origin ring to complete the loop.
-    //
-    // C++ next-swap semantics:
-    // - origin_point follows to other_point's next
-    // - other_point follows to origin_point's next
-    //
-    // For Vec: we interleave the sequences
+    let shared_coord = points_a[shared_idx_a];
+    let len_a = points_a.len();
+    let len_b = points_b.len();
 
-    let mut merged_points: Vec<Coord<T>> =
-        Vec::with_capacity(origin_points.len() + other_points.len());
-
-    // Add points from origin ring: [0..=origin_point_idx]
-    for i in 0..=origin_point_idx {
-        merged_points.push(origin_points[i]);
+    // Fragment 1: Start at shared, traverse through ring B, end at shared
+    // [shared] + B[(shared_b+1)..] + B[..shared_b]
+    let mut fragment_1: Vec<Coord<T>> = Vec::with_capacity(len_b);
+    fragment_1.push(shared_coord);
+    for offset in 1..len_b {
+        let idx = (shared_idx_b + offset) % len_b;
+        fragment_1.push(points_b[idx]);
     }
 
-    // Add points from other ring starting AFTER the shared point
-    // (other_point_idx + 1) through to (other_point_idx - 1), wrapping around
-    let other_len = other_points.len();
-    for offset in 1..other_len {
-        let idx = (other_point_idx + offset) % other_len;
-        merged_points.push(other_points[idx]);
+    // Fragment 2: Start at shared, traverse through ring A, end at shared
+    // [shared] + A[(shared_a+1)..] + A[..shared_a]
+    let mut fragment_2: Vec<Coord<T>> = Vec::with_capacity(len_a);
+    fragment_2.push(shared_coord);
+    for offset in 1..len_a {
+        let idx = (shared_idx_a + offset) % len_a;
+        fragment_2.push(points_a[idx]);
     }
 
-    // Add remaining points from origin ring: (origin_point_idx + 1) to end
-    // These wrap around back to the start
-    let origin_len = origin_points.len();
-    for offset in 1..origin_len {
-        let idx = (origin_point_idx + offset) % origin_len;
-        // Skip if this is the starting point (we already have it)
-        if offset < origin_len {
-            merged_points.push(origin_points[idx]);
-        }
-    }
-
-    // Remove duplicate closing point if present
-    if merged_points.len() > 1 && merged_points.first() == merged_points.last() {
-        merged_points.pop();
-    }
-
-    // Update the origin ring with merged points
-    if let Some(ring) = manager.get_mut(ring_origin_idx) {
-        *ring.points_mut() = merged_points;
+    // Assign Fragment 1 to ring_origin (ring_a)
+    if let Some(ring) = manager.get_mut(ring_a_idx) {
+        *ring.points_mut() = fragment_1;
         ring.set_corrected(false); // Mark as needing reprocessing
     }
 
-    // Clear the other ring (it's been absorbed)
-    if let Some(ring) = manager.get_mut(ring_other_idx) {
+    // Create a NEW ring for Fragment 2 (matching C++ behavior)
+    let new_ring_idx = manager.create_new_ring();
+    if let Some(ring) = manager.get_mut(new_ring_idx) {
+        *ring.points_mut() = fragment_2;
+        ring.set_corrected(false);
+    }
+
+    // Clear ring B (it's been split into the two fragments)
+    if let Some(ring) = manager.get_mut(ring_b_idx) {
         ring.points_mut().clear();
     }
 
+    if crate::debug::debug_enabled() {
+        eprintln!(
+            "[TOPOLOGY] merge_rings_at_intersection: split rings {} and {} at shared point -> ring {} (frag1, {} pts) + new ring {} (frag2, {} pts)",
+            ring_a_idx, ring_b_idx, ring_a_idx,
+            manager.get(ring_a_idx).map(|r| r.points().len()).unwrap_or(0),
+            new_ring_idx,
+            manager.get(new_ring_idx).map(|r| r.points().len()).unwrap_or(0)
+        );
+    }
+
     // Process additional rings in i_list (for chained merges)
+    // TODO: Handle chained merges for multi-ring chains - C++ does additional
+    // pointer swaps for each entry in iList
     for (_ring_idx, _pair) in i_list {
-        // TODO: Handle chained merges for multi-ring chains
-        // For now, the basic two-ring merge handles most cases
+        // Each entry needs the same next-swap treatment
+        // For now, basic two-ring split handles most cases
     }
 }
 

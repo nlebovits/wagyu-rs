@@ -89,7 +89,10 @@ pub fn log_ael_remove(idx: usize) {
 #[inline]
 pub fn log_intersect(b1: usize, b2: usize, pt: (f64, f64)) {
     if debug_enabled() {
-        eprintln!("[INTERSECT] b1={} b2={} pt=({:.0},{:.0})", b1, b2, pt.0, pt.1);
+        eprintln!(
+            "[INTERSECT] b1={} b2={} pt=({:.0},{:.0})",
+            b1, b2, pt.0, pt.1
+        );
     }
 }
 
@@ -132,7 +135,10 @@ pub fn log_ring_close(id: usize, point_count: usize) {
 #[inline]
 pub fn log_winding(idx: usize, wc: i32, wc2: i32, delta: i32) {
     if debug_enabled() {
-        eprintln!("[WINDING] idx={} wc={} wc2={} delta={}", idx, wc, wc2, delta);
+        eprintln!(
+            "[WINDING] idx={} wc={} wc2={} delta={}",
+            idx, wc, wc2, delta
+        );
     }
 }
 
@@ -140,7 +146,10 @@ pub fn log_winding(idx: usize, wc: i32, wc2: i32, delta: i32) {
 #[inline]
 pub fn log_contributing(idx: usize, result: bool, reason: &str) {
     if debug_enabled() {
-        eprintln!("[CONTRIBUTING] idx={} result={} reason={}", idx, result, reason);
+        eprintln!(
+            "[CONTRIBUTING] idx={} result={} reason={}",
+            idx, result, reason
+        );
     }
 }
 
@@ -148,7 +157,10 @@ pub fn log_contributing(idx: usize, result: bool, reason: &str) {
 #[inline]
 pub fn log_horizontal(idx: usize, left: f64, right: f64) {
     if debug_enabled() {
-        eprintln!("[HORIZONTAL] idx={} left={:.0} right={:.0}", idx, left, right);
+        eprintln!(
+            "[HORIZONTAL] idx={} left={:.0} right={:.0}",
+            idx, left, right
+        );
     }
 }
 

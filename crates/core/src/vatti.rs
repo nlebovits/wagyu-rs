@@ -125,7 +125,21 @@ pub fn execute_vatti<T>(
     // From C++: while (pop_from_scanbeam(scanline_y, scanbeam) || current_lm != minima_sorted.end())
     crate::debug::log_vatti_start(minima_list.len(), scanbeam.len());
 
+    const MAX_VATTI_ITERATIONS: usize = 100_000;
+    let mut vatti_iteration = 0;
+
     while pop_from_scanbeam(&mut scanline_y, &mut scanbeam) || current_lm_idx < minima_list.len() {
+        vatti_iteration += 1;
+        if vatti_iteration > MAX_VATTI_ITERATIONS {
+            panic!(
+                "INFINITE LOOP DETECTED in vatti main loop at iteration {}, scanline_y={:?}, current_lm_idx={}, minima_list.len()={}, scanbeam.len()={}",
+                vatti_iteration,
+                scanline_y.to_f64(),
+                current_lm_idx,
+                minima_list.len(),
+                scanbeam.len()
+            );
+        }
         crate::debug::log_scanbeam(scanline_y.to_f64().unwrap_or(0.0));
         // From C++: process_intersections(scanline_y, active_bounds, cliptype, subject_fill_type, clip_fill_type, manager);
         process_intersections(
