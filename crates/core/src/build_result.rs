@@ -460,6 +460,15 @@ fn build_polygon<T: CoordNum + Copy>(
     let mut holes = Vec::new();
     for &hole_index in exterior_ring.children() {
         if let Some(hole_ring) = manager.get(hole_index) {
+            // Skip empty or degenerate rings (need at least 3 points for a valid hole)
+            if hole_ring.points().len() < 3 {
+                // Still process grandchildren even if this hole is empty
+                for &grandchild_index in hole_ring.children() {
+                    grandchildren.push(grandchild_index);
+                }
+                continue;
+            }
+
             // PORT FROM: C++ build_result.hpp - holes use same reverse_output flag as exterior
             // The ring already has correct CW winding from correct_orientations
             holes.push(ring_to_linestring(hole_ring, reverse_output));
