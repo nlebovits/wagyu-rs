@@ -1,270 +1,96 @@
-# wagyu-rs - Claude Code Instructions
+# wagyu-rs
 
-## Project Overview
-
-Rust port of [Mapbox wagyu](https://github.com/mapbox/wagyu), a C++ geometry boolean operations library.
-
-**Goal:** 1:1 port of wagyu C++ algorithms to idiomatic Rust, maintaining correctness and OGC validity guarantees.
+Rust port of [Mapbox wagyu](https://github.com/mapbox/wagyu) C++ polygon clipping library.
 
 ## Critical Constraints
 
-### 1. Test-Driven Development (TDD) is MANDATORY
+### TDD is Mandatory
 
-**YOU MUST WRITE TESTS BEFORE IMPLEMENTATION. NO EXCEPTIONS.**
-
-This is not optional. This is not "when convenient." Every single piece of functionality follows:
+Write tests BEFORE implementation. No exceptions.
 
 ```
-RED    → Write a failing test first
+RED    → Write failing test first
 GREEN  → Write minimum code to pass
 REFACTOR → Clean up while tests stay green
 ```
 
-#### TDD Workflow (REQUIRED)
+Run pre-commit hooks: `git config core.hooksPath .githooks`
 
-```bash
-# Step 1: Write test, verify it FAILS (RED)
-cargo test --package wagyu-core <test_name> -- --nocapture
-# Must see: "test <test_name> ... FAILED"
+### Reference Implementation
 
-# Step 2: Implement ONLY enough to pass (GREEN)
-cargo test --package wagyu-core <test_name> -- --nocapture
-# Must see: "test <test_name> ... ok"
+C++ source at `../wagyu` (local clone). All algorithms must match C++ behavior.
 
-# Step 3: Refactor if needed, tests must stay green
-cargo test --package wagyu-core --lib
-
-# Step 4: Commit with TDD marker
-git commit -m "feat: implement X (TDD green)"
-```
-
-#### WHY THIS MATTERS FOR PORTING
-
-- wagyu C++ has **148 golden test fixtures** - use them!
-- Tests prove your port matches C++ behavior
-- Without tests, you're just guessing if the port is correct
-
-#### RED FLAGS (DO NOT DO THESE)
-
-- Writing implementation code before any test exists
-- "I'll add tests later" - NO, add them NOW
-- Porting a whole file then writing tests - port ONE function with tests first
-- Skipping tests for "simple" code - simple code has bugs too
-
-### 2. Reference Implementation: wagyu C++
-
-**All algorithms MUST match the original wagyu behavior.**
-
-#### Local Reference
-
-A local clone exists at `../wagyu` (relative to this repo root). Use this for:
-- Reading C++ source files directly
-- Checking test cases
-- Understanding algorithm implementations
-
-```bash
-# Example: read the main entry point
-cat ../wagyu/include/mapbox/geometry/wagyu/wagyu.hpp
-```
-
-#### Remote Reference (if no local clone)
-
-If `../wagyu` doesn't exist, use **gitingest + distill** to fetch from GitHub:
-
-```bash
-# Generate digest from GitHub
-gitingest https://github.com/mapbox/wagyu
-
-# Then compress with distill for token efficiency
-mcp__distill__auto_optimize(content, hint="code")
-```
-
-**GitHub remote:** https://github.com/mapbox/wagyu
-
-#### When Porting
-
+When porting, add header comments:
 ```rust
 // PORT FROM: wagyu/include/mapbox/geometry/wagyu/local_minimum.hpp
-// Original C++ comment preserved here...
 ```
 
-#### When Deviating
-
+When deviating from C++:
 ```rust
 // DIVERGENCE FROM WAGYU: [reason]
-// C++ does X (see local_minimum.hpp:L45)
-// Rust does Y because [ownership / performance / etc.]
+// C++ does X (see file.hpp:L45), Rust does Y because [ownership/etc.]
 ```
 
-Document all divergences in `context/ARCHITECTURE.md`.
+Document divergences in `context/ARCHITECTURE.md`.
 
-### 3. OGC Validity
+### Ownership Strategy
 
-Output geometry MUST be valid and simple per [OGC standards](http://postgis.net/docs/using_postgis_dbmanagement.html#OGC_Validity):
-- No self-intersections
-- Correct ring orientations
-- Proper hole containment
+Use `Vec` + `usize` indices for graph structures. No `Rc<RefCell<>>`, no arena allocators, no unsafe.
 
-### 4. Ownership Strategy
+### OGC Validity
 
-**Use plain `Vec` + `usize` indices for graph structures.**
+Output must be valid per OGC: no self-intersections, correct ring orientations, proper hole containment.
 
-DO NOT use:
-- `slotmap` or arena allocators
-- `Rc<RefCell<>>` or other interior mutability
-- Raw pointers or unsafe blocks
+## Tools
 
-**Why this approach:**
-- [iOverlay](https://github.com/nickhartjes/ioverlay), a production Rust polygon clipping library, uses this pattern successfully
-- Simpler for a 1:1 port—closer to C++ mental model where pointers become indices
-- No external dependencies needed
-- 148 golden tests will catch any correctness issues
+### Oracle Harness
 
-See `context/ARCHITECTURE.md` for detailed rationale.
-
-## Architecture
-
-```
-crates/
-├── core/     # ALL clipping logic lives here
-└── cli/      # Thin CLI wrapper (placeholder for now)
-```
-
-**Library-first:** CLI is a thin consumer. Never put logic in CLI that belongs in core.
-
-## Operations
-
-| Operation | Description |
-|-----------|-------------|
-| Union | Combine two polygons |
-| Intersection | Common area |
-| Difference | A minus B |
-| Xor | Symmetric difference |
-
-## Commands
+Compare Rust output against C++ oracle (PR #41):
 
 ```bash
-cargo build                   # Build
-cargo test                    # Run all tests
-cargo bench                   # Run benchmarks
-cargo fmt --all               # Format (required before commit)
-cargo clippy                  # Lint
+# Build C++ oracle
+cd tools/oracle && ./build_oracle.sh
+
+# Compare single test
+./compare.sh tests/fixtures/polygon.json xor even_odd
+
+# Compare all failing tests
+./compare_all.sh
 ```
 
-## Git Workflow
+### Debug Logging
 
-### Branch Protection
-
-**The `main` branch is protected.** All changes must go through pull requests:
-
+Enable with `WAGYU_DEBUG=1`:
 ```bash
-git checkout -b feat/my-feature
-git push -u origin feat/my-feature
-gh pr create --title "feat: description" --body "..."
+WAGYU_DEBUG=1 cargo test test_name -- --nocapture
 ```
 
-### DO NOT
+## Debugging Patterns
 
-- Push directly to `main`
-- Force push to shared branches
-- Merge without CI passing
+### Infinite Loop Bugs
 
-## Commit Convention
+Topology correction convergence loops are prone to infinite loops. Pattern:
 
-We use [Conventional Commits](https://www.conventionalcommits.org/). See `CONTRIBUTING.md`.
+1. **Spawn parallel agents**: reproducer (confirm + gather debug output) + comparator (C++ vs Rust line-by-line)
+2. **Check return value semantics**: C++ may return "was visited" while Rust returns "did something"
+3. **Check data structure operations**: C++ linked-list pointer swaps → Rust Vec splits (not concatenations)
 
-```bash
-feat: add local minima detection
-fix: correct ring orientation for holes
-port(core): translate vatti_clip from C++
-test: add golden tests for union operation
-```
+Loop guards exist in `vatti.rs` and `intersect_util.rs` (panic after 100k iterations).
 
-## Key Documents
+### C++ Linked-List → Rust Vec Translation
 
-| Document | Purpose |
-|----------|---------|
-| `context/ARCHITECTURE.md` | Design decisions, wagyu divergences |
-| `CONTRIBUTING.md` | How to contribute, commit conventions |
+| C++ Pattern | Rust Pattern |
+|-------------|--------------|
+| `ptr->next = other->next` (next-swap) | Split into two fragments, create new ring |
+| `ptr->prev`, `ptr->next` traversal | Index arithmetic with modulo wrapping |
+| Pointer comparison | Index comparison |
 
-## Setup
+### Known Bug Areas
 
-```bash
-git config core.hooksPath .githooks  # Enable pre-commit hooks
-```
+- `merge_rings_at_intersection`: Must SPLIT rings, not concatenate (#37 tracks `i_list` chain handling)
+- `correct_ring_self_intersections`: Return `true` for visited rings, not just when splits occur
+- Parent/child ring assignment after topology operations
 
-## Porting Guide
+## Current Status
 
-**REMEMBER: TDD IS MANDATORY. WRITE TESTS BEFORE CODE.**
-
-When porting from wagyu C++:
-
-1. **Check for local clone** at `../wagyu`
-   - If missing, use `gitingest https://github.com/mapbox/wagyu` + distill
-
-2. **Find the corresponding C++ file** in `include/mapbox/geometry/wagyu/`
-
-3. **Find/write tests FIRST** (before any implementation!)
-   - Check `../wagyu/tests/unit/` for existing C++ tests
-   - Check `../wagyu/tests/fixtures/` and `../wagyu/tests/expected/` for golden tests
-   - Translate test cases to Rust `#[test]` functions
-   - Run tests - they MUST FAIL (red)
-
-4. **Implement minimum code to pass tests** (green)
-   - Port ONE function at a time
-   - Run tests after each function
-   - Stop when tests pass
-
-5. **Refactor** while keeping tests green
-
-6. **Preserve comments** - include original C++ documentation
-
-7. **Document divergences** - Rust ownership model may require changes
-
-### Porting Workflow Example
-
-```bash
-# 1. Read C++ test
-cat ../wagyu/tests/unit/edge.cpp
-
-# 2. Write Rust test (MUST FAIL)
-# In crates/core/src/edge.rs:
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_edge_is_horizontal() {
-        // Translated from edge.cpp
-        todo!("implement after writing test")
-    }
-}
-
-# 3. Verify RED
-cargo test --package wagyu-core edge::tests::test_edge_is_horizontal
-# Expected: FAILED or compile error
-
-# 4. Implement, verify GREEN
-cargo test --package wagyu-core edge::tests::test_edge_is_horizontal
-# Expected: ok
-
-# 5. Commit
-git commit -m "feat(edge): add is_horizontal check (TDD green)"
-```
-
-### Key C++ Files
-
-```
-../wagyu/include/mapbox/geometry/wagyu/
-├── wagyu.hpp              # Main entry point
-├── vatti.hpp              # Vatti algorithm (core clipper)
-├── local_minimum.hpp      # Local minima handling
-├── build_edges.hpp        # Edge construction
-├── build_result.hpp       # Result polygon construction
-├── process_horizontal.hpp # Horizontal edge processing
-├── intersect.hpp          # Edge intersections
-├── ring.hpp               # Ring data structures
-├── bound.hpp              # Bound data structures
-├── edge.hpp               # Edge data structures
-├── point.hpp              # Point data structures
-├── config.hpp             # Configuration types
-└── almost_equal.hpp       # Floating point comparison (Google license)
-```
+~39/148 golden tests passing. Main gaps: topology correction for complex hole arrangements.
