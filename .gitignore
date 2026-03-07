@@ -31,3 +31,4 @@ mutants.out/
 
 # MkDocs
 site/
+.grepai/

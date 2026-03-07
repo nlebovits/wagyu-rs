@@ -407,7 +407,12 @@ pub fn insert_horizontal_local_minima_into_abl<T: CoordNum + ToPrimitive>(
         crate::debug::log_horizontal(
             left_idx,
             bot.x.to_f64().unwrap_or(0.0),
-            bounds[right_idx].current_edge().bot.x.to_f64().unwrap_or(0.0),
+            bounds[right_idx]
+                .current_edge()
+                .bot
+                .x
+                .to_f64()
+                .unwrap_or(0.0),
         );
 
         // Check if this local minimum contributes to output

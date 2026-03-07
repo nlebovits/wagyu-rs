@@ -60,7 +60,10 @@ fn parse_operation(s: &str) -> Result<Operation> {
         "intersection" => Ok(Operation::Intersection),
         "difference" => Ok(Operation::Difference),
         "xor" => Ok(Operation::Xor),
-        _ => anyhow::bail!("Unknown operation: {}. Use: union, intersection, difference, xor", s),
+        _ => anyhow::bail!(
+            "Unknown operation: {}. Use: union, intersection, difference, xor",
+            s
+        ),
     }
 }
 
@@ -124,11 +127,7 @@ fn main() -> Result<()> {
             let mut rings = Vec::new();
 
             // Exterior ring
-            let exterior: Vec<[i64; 2]> = polygon
-                .exterior()
-                .coords()
-                .map(|c| [c.x, c.y])
-                .collect();
+            let exterior: Vec<[i64; 2]> = polygon.exterior().coords().map(|c| [c.x, c.y]).collect();
             rings.push(exterior);
 
             // Interior rings (holes)

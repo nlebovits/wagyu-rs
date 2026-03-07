@@ -200,7 +200,17 @@ pub fn build_intersect_list<T>(
 
     // Bubble sort simulation with intersection detection
     let mut swapped = true;
+    const MAX_BUBBLE_SORT_ITERATIONS: usize = 100_000;
+    let mut bubble_iteration = 0;
     while swapped {
+        bubble_iteration += 1;
+        if bubble_iteration > MAX_BUBBLE_SORT_ITERATIONS {
+            panic!(
+                "INFINITE LOOP DETECTED in build_intersect_list bubble sort at iteration {}, simulated_order.len()={}",
+                bubble_iteration,
+                simulated_order.len()
+            );
+        }
         swapped = false;
         for i in 0..simulated_order.len() - 1 {
             let idx1 = simulated_order[i];
