@@ -282,21 +282,54 @@ impl<T: CoordNum> RingManager<T> {
 
     /// Assign a ring as a child of a parent (or as top-level if parent is None).
     ///
+    /// This function is safe to call on rings that already have a parent - it will
+    /// remove the ring from the old parent's children list first (fix for issue #57).
+    ///
     /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - assign_as_child
+    ///
+    /// DIVERGENCE FROM WAGYU: C++ assign_as_child assumes the ring is brand new with no
+    /// existing parent. Rust version is defensive and removes from old parent if present.
+    /// This prevents stale parent-child references if called on an already-parented ring.
     pub fn assign_as_child(&mut self, child_idx: usize, new_parent_idx: Option<usize>) {
-        // Set hole status based on parent: child of exterior is a hole, child of hole is exterior
+        // Step 1: Remove from old parent first (if any) - Fix for issue #57
+        // This makes assign_as_child safe for re-assignment, preventing duplicate entries
+        let old_parent = self.rings.get(child_idx).and_then(|r| r.parent());
+        match old_parent {
+            Some(old_p) if Some(old_p) != new_parent_idx => {
+                // Remove from old parent's children list
+                if let Some(old_parent_ring) = self.rings.get_mut(old_p) {
+                    old_parent_ring.remove_child(child_idx);
+                }
+            }
+            None => {
+                // Remove from top_level_rings if present
+                self.top_level_rings.retain(|&idx| idx != child_idx);
+            }
+            _ => {
+                // old_parent == new_parent_idx, no need to remove
+            }
+        }
+
+        // Step 2: Set hole status based on parent
         let is_hole = match new_parent_idx {
             Some(p) => !self.ring_is_hole(p),
             None => false,
         };
+
+        // Step 3: Update ring's parent pointer and hole status
         if let Some(ring) = self.rings.get_mut(child_idx) {
             ring.set_hole(is_hole);
             ring.set_parent(new_parent_idx);
         }
+
+        // Step 4: Add to new parent's children list (or top_level_rings)
         match new_parent_idx {
             Some(p) => {
                 if let Some(parent) = self.rings.get_mut(p) {
-                    parent.add_child(child_idx);
+                    // Only add if not already present (idempotent)
+                    if !parent.children().contains(&child_idx) {
+                        parent.add_child(child_idx);
+                    }
                 }
             }
             None => {
@@ -1005,5 +1038,157 @@ mod tests {
 
         // CW should be detected as hole
         assert!(manager.ring_is_hole(idx_cw));
+    }
+
+    // ==================== assign_as_child Tests (Issue #57) ====================
+
+    /// TDD RED test for issue #57:
+    /// When assign_as_child is called on a ring that already has a parent,
+    /// it must remove the ring from the old parent's children list.
+    /// Otherwise, the ring appears in multiple parents' children lists.
+    #[test]
+    fn assign_as_child_removes_from_old_parent() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Create parent1, parent2, and a child ring
+        let parent1 = manager.add_ring(make_square_ring(100.0));
+        let parent2 = manager.add_ring(make_square_ring(100.0));
+        let child = manager.add_ring(make_square_ring(10.0));
+
+        // Assign child to parent1 first
+        manager.assign_as_child(child, Some(parent1));
+
+        // Verify setup: child is in parent1's children list
+        assert!(
+            manager.children(parent1).contains(&child),
+            "Setup: child should be in parent1's children"
+        );
+        assert_eq!(
+            manager.parent(child),
+            Some(parent1),
+            "Setup: child's parent should be parent1"
+        );
+
+        // Now reassign child to parent2 using assign_as_child
+        // (This is the bug: the current code doesn't remove from parent1)
+        manager.assign_as_child(child, Some(parent2));
+
+        // Child should be in parent2's children
+        assert!(
+            manager.children(parent2).contains(&child),
+            "child should be in parent2's children after reassignment"
+        );
+        assert_eq!(
+            manager.parent(child),
+            Some(parent2),
+            "child's parent should be parent2"
+        );
+
+        // KEY ASSERTION (Issue #57):
+        // Child must NOT be in parent1's children list anymore
+        assert!(
+            !manager.children(parent1).contains(&child),
+            "BUG #57: child is still in parent1's children list after being reassigned to parent2. \
+             assign_as_child must remove from old parent before adding to new parent."
+        );
+    }
+
+    /// Integration test: verify ring hierarchy consistency after multiple reassignments.
+    /// A ring should appear in exactly one parent's children list at all times.
+    #[test]
+    fn assign_as_child_maintains_hierarchy_invariant() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Create a tree: root -> [p1, p2, p3] -> child moves between them
+        let root = manager.add_ring(make_square_ring(200.0));
+        let p1 = manager.add_ring(make_square_ring(50.0));
+        let p2 = manager.add_ring(make_square_ring(50.0));
+        let p3 = manager.add_ring(make_square_ring(50.0));
+        let child = manager.add_ring(make_square_ring(10.0));
+
+        // Set up tree structure
+        manager.assign_as_child(p1, Some(root));
+        manager.assign_as_child(p2, Some(root));
+        manager.assign_as_child(p3, Some(root));
+
+        // Helper to count how many parents list 'child' in their children
+        let count_parents = |mgr: &RingManager<f64>, c: usize| -> usize {
+            [root, p1, p2, p3]
+                .iter()
+                .filter(|&&p| mgr.children(p).contains(&c))
+                .count()
+        };
+
+        // Initially child is top-level (in top_level_rings)
+        assert!(manager.top_level_rings().contains(&child));
+        assert_eq!(count_parents(&manager, child), 0);
+
+        // Move child through multiple parents
+        manager.assign_as_child(child, Some(p1));
+        assert_eq!(
+            count_parents(&manager, child),
+            1,
+            "child should be in exactly one parent's children after assign to p1"
+        );
+        assert!(!manager.top_level_rings().contains(&child));
+
+        manager.assign_as_child(child, Some(p2));
+        assert_eq!(
+            count_parents(&manager, child),
+            1,
+            "child should be in exactly one parent's children after assign to p2"
+        );
+
+        manager.assign_as_child(child, Some(p3));
+        assert_eq!(
+            count_parents(&manager, child),
+            1,
+            "child should be in exactly one parent's children after assign to p3"
+        );
+
+        // Move back to p1
+        manager.assign_as_child(child, Some(p1));
+        assert_eq!(
+            count_parents(&manager, child),
+            1,
+            "child should be in exactly one parent's children after returning to p1"
+        );
+        assert!(manager.children(p1).contains(&child));
+        assert!(!manager.children(p2).contains(&child));
+        assert!(!manager.children(p3).contains(&child));
+
+        // Move back to top-level
+        manager.assign_as_child(child, None);
+        assert_eq!(
+            count_parents(&manager, child),
+            0,
+            "child should not be in any parent's children after assign to None"
+        );
+        assert!(manager.top_level_rings().contains(&child));
+    }
+
+    /// Test that assign_as_child removes from top_level_rings when assigning to a parent.
+    #[test]
+    fn assign_as_child_removes_from_top_level_rings() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Create parent and a top-level ring
+        let parent = manager.add_ring(make_square_ring(100.0));
+        let ring = manager.add_ring(make_square_ring(10.0));
+
+        // Initially, ring should be in top_level_rings (added by add_ring)
+        assert!(
+            manager.top_level_rings().contains(&ring),
+            "Setup: ring should be in top_level_rings"
+        );
+
+        // Assign to parent
+        manager.assign_as_child(ring, Some(parent));
+
+        // Ring should be removed from top_level_rings
+        assert!(
+            !manager.top_level_rings().contains(&ring),
+            "BUG #57: ring is still in top_level_rings after being assigned to a parent"
+        );
     }
 }
