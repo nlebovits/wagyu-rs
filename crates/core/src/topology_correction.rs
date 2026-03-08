@@ -809,26 +809,39 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
             }
         }
 
-        // If no parent found and this ring is calculated as a hole, that's an error
+        // If no parent found, handle based on orientation.
         // PORT FROM: C++ correct_tree lines 1294-1300
-        // If it's not a hole, it's already a top-level exterior - no action needed
-        if !found_parent && ring_is_hole {
-            // C++ throws: "Could not properly place hole to a parent."
-            // DIVERGENCE FROM WAGYU: We demote the hole to a top-level exterior instead
-            // of throwing, to avoid aborting the entire operation on malformed input.
-            // Fix for issue #59: Add debug logging for this case.
-            if crate::debug::debug_enabled() {
-                eprintln!(
-                    "[TOPOLOGY] correct_tree: ring {} is hole but no parent found, demoting to exterior",
-                    ring_idx
-                );
+        if !found_parent {
+            if ring_is_hole {
+                // C++ throws: "Could not properly place hole to a parent."
+                // DIVERGENCE FROM WAGYU: We demote the hole to a top-level exterior instead
+                // of throwing, to avoid aborting the entire operation on malformed input.
+                // Fix for issue #59: Add debug logging for this case.
+                if crate::debug::debug_enabled() {
+                    eprintln!(
+                        "[TOPOLOGY] correct_tree: ring {} is hole but no parent found, demoting to exterior",
+                        ring_idx
+                    );
+                }
+                if let Some(ring) = manager.get_mut(ring_idx) {
+                    ring.set_hole(false);
+                }
+                // Fix for issue #59: Clear the parent pointer to make it a proper top-level ring.
+                // C++ calls reassign_as_child(*itr, nullptr, ...) which clears the parent.
+                manager.clear_parent(ring_idx);
+            } else {
+                // This ring is a top-level exterior. Ensure the stored is_hole flag matches
+                // the area-based determination. The flag may be stale from Vatti (e.g. the
+                // ring was initially assigned as a child inside a hole, setting is_hole=true,
+                // but after degenerate parent rings are removed in correct_tree, the ring
+                // becomes a top-level exterior). Without this update, recalculate_top_level_rings
+                // would skip the ring because it checks ring.is_hole().
+                // DIVERGENCE FROM WAGYU: C++ recalculates is_hole_ via recalculate_stats()
+                // inside reverse_ring/reassign_as_child. Rust must update the flag explicitly.
+                if let Some(ring) = manager.get_mut(ring_idx) {
+                    ring.set_hole(false);
+                }
             }
-            if let Some(ring) = manager.get_mut(ring_idx) {
-                ring.set_hole(false);
-            }
-            // Fix for issue #59: Clear the parent pointer to make it a proper top-level ring.
-            // C++ calls reassign_as_child(*itr, nullptr, ...) which clears the parent.
-            manager.clear_parent(ring_idx);
         }
     }
 
