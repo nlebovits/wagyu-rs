@@ -739,10 +739,21 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
         // If it's not a hole, it's already a top-level exterior - no action needed
         if !found_parent && ring_is_hole {
             // C++ throws: "Could not properly place hole to a parent."
-            // For now, we just make it a top-level exterior
+            // DIVERGENCE FROM WAGYU: We demote the hole to a top-level exterior instead
+            // of throwing, to avoid aborting the entire operation on malformed input.
+            // Fix for issue #59: Add debug logging for this case.
+            if crate::debug::debug_enabled() {
+                eprintln!(
+                    "[TOPOLOGY] correct_tree: ring {} is hole but no parent found, demoting to exterior",
+                    ring_idx
+                );
+            }
             if let Some(ring) = manager.get_mut(ring_idx) {
                 ring.set_hole(false);
             }
+            // Fix for issue #59: Clear the parent pointer to make it a proper top-level ring.
+            // C++ calls reassign_as_child(*itr, nullptr, ...) which clears the parent.
+            manager.clear_parent(ring_idx);
         }
     }
 
@@ -1295,8 +1306,20 @@ pub fn assign_new_ring_parents<T: CoordNum + Copy>(
                         &valid_new_rings,
                     );
                 }
+            } else {
+                // C++ throws: "Unable to find a proper parent ring"
+                // DIVERGENCE FROM WAGYU: We skip the ring instead of throwing,
+                // to avoid aborting the entire operation on malformed input.
+                // Fix for issue #59: Add debug logging for this case.
+                if crate::debug::debug_enabled() {
+                    eprintln!(
+                        "[TOPOLOGY] assign_new_ring_parents: ring {} (opposite orientation) \
+                         has no parent in original ring {} tree -- ring unplaced \
+                         (C++ throws \"Unable to find a proper parent ring\")",
+                        new_ring_idx, orig_ring_idx
+                    );
+                }
             }
-            // If not found, skip (C++ throws but we're more lenient)
         }
     }
 }
@@ -4893,7 +4916,7 @@ mod tests {
         // resulting ring hierarchy should have the exterior as the "origin" role.
         //
         // The fix is verified by:
-        // 1. Golden tests improving (56 -> 57 passing)
+        // 1. Golden tests improving
         // 2. No regressions in lib tests
         //
         // A full unit test would require mocking the connection_map and i_list setup,
@@ -4911,8 +4934,86 @@ mod tests {
         // The expected behavior after topology correction is that the exterior's
         // role takes precedence for parent/child assignment.
         //
-        // This is validated by the golden test improvement (56 -> 57 passing).
+        // This is validated by the golden test improvement.
         // The specific geometry that exercises this path is in the golden test fixtures.
+    }
+
+    // ==================== Issue #59: Silent ring drop tests ====================
+
+    /// Test that correct_tree properly clears parent pointer when demoting hole to exterior.
+    /// Fix for issue #59: The hole should become a proper top-level ring with no parent.
+    ///
+    /// Note: Rust's ring_is_hole() calculates from area, not a stored flag, so set_hole(false)
+    /// doesn't actually change ring_is_hole() return value. The key fix is clearing the parent.
+    #[test]
+    fn test_correct_tree_clears_parent_when_demoting_hole() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Create an exterior ring (CCW = positive area)
+        let mut exterior: Ring<f64> = Ring::empty();
+        exterior.push_point(Coord { x: 0.0, y: 0.0 });
+        exterior.push_point(Coord { x: 100.0, y: 0.0 });
+        exterior.push_point(Coord { x: 100.0, y: 100.0 });
+        exterior.push_point(Coord { x: 0.0, y: 100.0 });
+        let _ext_idx = manager.add_ring(exterior);
+
+        // Create a "hole" ring (CW = negative area) that is NOT geometrically inside any exterior
+        // This simulates a malformed geometry that correct_tree must handle
+        // CW winding: start → up → right → down → back to start (negative area)
+        let mut orphan_hole: Ring<f64> = Ring::empty();
+        orphan_hole.push_point(Coord { x: 200.0, y: 200.0 }); // Far outside the exterior
+        orphan_hole.push_point(Coord { x: 200.0, y: 210.0 }); // up
+        orphan_hole.push_point(Coord { x: 210.0, y: 210.0 }); // right
+        orphan_hole.push_point(Coord { x: 210.0, y: 200.0 }); // down (closes CW)
+        let hole_idx = manager.add_ring(orphan_hole);
+
+        // Verify the ring has negative area (CW = hole)
+        let area = crate::ring_util::ring_area(manager.get(hole_idx).unwrap().points());
+        assert!(area < 0.0, "Test setup: orphan ring must have negative area (CW)");
+
+        // Give it a stale parent (simulating previous topology operations)
+        manager.set_parent(hole_idx, 999);
+
+        // Run correct_tree
+        correct_tree(&mut manager);
+
+        // After correct_tree, the orphan hole should have no parent (clear_parent called).
+        // The key fix is that clear_parent is called, not just set_hole(false).
+        // Note: ring_is_hole() still returns true because it's area-based.
+        assert_eq!(
+            manager.parent(hole_idx),
+            None,
+            "Demoted ring should have no parent (clear_parent must be called). \
+             This is the fix for issue #59."
+        );
+    }
+
+    /// Test that the fix for issue #59 adds the demoted ring to top_level_rings.
+    #[test]
+    fn test_correct_tree_adds_demoted_hole_to_top_level() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Create a "hole" ring (CW = negative area) that is NOT inside any exterior
+        // CW winding: start → up → right → down → back to start (negative area)
+        let mut orphan_hole: Ring<f64> = Ring::empty();
+        orphan_hole.push_point(Coord { x: 0.0, y: 0.0 });
+        orphan_hole.push_point(Coord { x: 0.0, y: 10.0 }); // up
+        orphan_hole.push_point(Coord { x: 10.0, y: 10.0 }); // right
+        orphan_hole.push_point(Coord { x: 10.0, y: 0.0 }); // down (closes CW)
+        let hole_idx = manager.add_ring(orphan_hole);
+
+        // Verify the ring has negative area (CW = hole)
+        let area = crate::ring_util::ring_area(manager.get(hole_idx).unwrap().points());
+        assert!(area < 0.0, "Test setup: orphan ring must have negative area (CW)");
+
+        // Run correct_tree
+        correct_tree(&mut manager);
+
+        // The ring should now be in top_level_rings (after being demoted to exterior)
+        assert!(
+            manager.top_level_rings().contains(&hole_idx),
+            "Demoted hole should be added to top_level_rings"
+        );
     }
 }
 
