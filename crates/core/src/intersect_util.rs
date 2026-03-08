@@ -907,7 +907,6 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
                     if let Some(owner_pos) = owner_pos {
                         // Look leftward in the AEL to find parent ring
                         // C++: finds first ring to the left, canceling pairs with same ring
-                        let mut parent_ring: Option<usize> = None;
                         let mut tmp_ring: Option<usize> = None;
 
                         for i in (0..owner_pos).rev() {
@@ -924,9 +923,7 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
                             }
                         }
 
-                        parent_ring = tmp_ring;
-
-                        if let Some(parent_idx) = parent_ring {
+                        if let Some(parent_idx) = tmp_ring {
                             manager.set_parent(ring_idx, parent_idx);
                             if let Some(ring) = manager.get_mut(ring_idx) {
                                 ring.set_hole(true);

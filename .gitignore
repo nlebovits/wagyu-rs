@@ -32,3 +32,6 @@ mutants.out/
 # MkDocs
 site/
 .grepai/
+
+# Worktrees
+.worktrees/
