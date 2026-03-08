@@ -207,6 +207,12 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
         // Use split_at_mut to get two mutable references safely
         // BUGFIX: Capture and handle IntersectResult to update other bounds
         // when rings are merged during horizontal processing
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[HORIZ_INTERSECT] horz_idx={} (ring={:?}) next_idx={} (ring={:?})",
+                horz_idx, bounds[horz_idx].ring, next_idx, bounds[next_idx].ring
+            );
+        }
         let result = {
             let (b1, b2) = if horz_idx < next_idx {
                 let (left, right) = bounds.split_at_mut(next_idx);
@@ -232,11 +238,29 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
         match result {
             IntersectResult::Merged(keep_ring_idx, remove_ring_idx, keep_side) => {
                 // Update other active bounds that reference the removed ring
+                if crate::debug::debug_enabled() {
+                    eprintln!(
+                        "[HORIZ_MERGE_SEARCH] Looking for bounds with ring={}, AEL has {} bounds",
+                        remove_ring_idx, ael.as_slice().len()
+                    );
+                    for &ab_idx in ael.as_slice() {
+                        eprintln!(
+                            "  [AEL_BOUND] idx={} ring={:?} side={:?}",
+                            ab_idx, bounds[ab_idx].ring, bounds[ab_idx].side
+                        );
+                    }
+                }
                 for &ab_idx in ael.as_slice() {
                     if bounds[ab_idx].ring == Some(remove_ring_idx) {
+                        if crate::debug::debug_enabled() {
+                            eprintln!(
+                                "[BOUND_UPDATE] process_horiz_right: ab_idx={} ring: {} -> {}, side: {:?}",
+                                ab_idx, remove_ring_idx, keep_ring_idx, keep_side
+                            );
+                        }
                         bounds[ab_idx].ring = Some(keep_ring_idx);
                         bounds[ab_idx].side = keep_side;
-                        break; // C++ breaks after first match
+                        // FIX #53: Don't break - update ALL bounds with removed ring
                     }
                 }
             }
@@ -404,11 +428,29 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
         match result {
             IntersectResult::Merged(keep_ring_idx, remove_ring_idx, keep_side) => {
                 // Update other active bounds that reference the removed ring
+                if crate::debug::debug_enabled() {
+                    eprintln!(
+                        "[HORIZ_MERGE_SEARCH_L] Looking for bounds with ring={}, AEL has {} bounds",
+                        remove_ring_idx, ael.as_slice().len()
+                    );
+                    for &ab_idx in ael.as_slice() {
+                        eprintln!(
+                            "  [AEL_BOUND] idx={} ring={:?} side={:?}",
+                            ab_idx, bounds[ab_idx].ring, bounds[ab_idx].side
+                        );
+                    }
+                }
                 for &ab_idx in ael.as_slice() {
                     if bounds[ab_idx].ring == Some(remove_ring_idx) {
+                        if crate::debug::debug_enabled() {
+                            eprintln!(
+                                "[BOUND_UPDATE] process_horiz_left: ab_idx={} ring: {} -> {}, side: {:?}",
+                                ab_idx, remove_ring_idx, keep_ring_idx, keep_side
+                            );
+                        }
                         bounds[ab_idx].ring = Some(keep_ring_idx);
                         bounds[ab_idx].side = keep_side;
-                        break; // C++ breaks after first match
+                        // FIX #53: Don't break - update ALL bounds with removed ring
                     }
                 }
             }

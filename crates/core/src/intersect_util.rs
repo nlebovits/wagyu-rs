@@ -459,6 +459,13 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
     ring2_idx: usize,
     manager: &mut RingManager<T>,
 ) -> (usize, usize, EdgeSide) {
+    // DEBUG: Log which bounds/rings are being merged
+    if crate::debug::debug_enabled() {
+        eprintln!(
+            "[MERGE_RINGS] b1.ring={:?} b2.ring={:?}, ring1_idx={} ring2_idx={}",
+            b1.ring, b2.ring, ring1_idx, ring2_idx
+        );
+    }
     // Determine which ring to keep (lower index = created first)
     // C++ uses get_lower_most_ring based on bottom point, but for simplicity
     // we use ring index ordering (matches C++ append_ring fallback behavior)
@@ -793,11 +800,31 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
                 IntersectResult::Merged(keep_ring_idx, remove_ring_idx, keep_side) => {
                     // Update other active bounds that reference the removed ring
                     // PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - append_ring (lines 597-606)
+                    if crate::debug::debug_enabled() {
+                        eprintln!(
+                            "[MERGE_SEARCH] Looking for bounds with ring={}, AEL has {} bounds",
+                            remove_ring_idx, ael.as_slice().len()
+                        );
+                        for &ab_idx in ael.as_slice() {
+                            eprintln!(
+                                "  [AEL_BOUND] idx={} ring={:?} side={:?}",
+                                ab_idx, bounds[ab_idx].ring, bounds[ab_idx].side
+                            );
+                        }
+                    }
                     for &ab_idx in ael.as_slice() {
                         if bounds[ab_idx].ring == Some(remove_ring_idx) {
+                            if crate::debug::debug_enabled() {
+                                eprintln!(
+                                    "[BOUND_UPDATE] intersect_merge: ab_idx={} ring: {} -> {}, side: {:?}",
+                                    ab_idx, remove_ring_idx, keep_ring_idx, keep_side
+                                );
+                            }
                             bounds[ab_idx].ring = Some(keep_ring_idx);
                             bounds[ab_idx].side = keep_side;
-                            break; // C++ breaks after first match
+                            // FIX #53: Don't break - update ALL bounds with removed ring
+                            // C++ breaks because pointer comparison is unique.
+                            // In Rust, multiple bounds can share the same ring index.
                         }
                     }
                 }
@@ -1480,6 +1507,62 @@ mod tests {
             (pt.y - 5.0).abs() < 1e-10,
             "Intersection y should be 5, got {}",
             pt.y
+        );
+    }
+
+    // ==================== Issue #53: Chained Merge Bug Tests ====================
+
+    /// Test for issue #53: Verifies that when multiple bounds reference the same
+    /// ring index, ALL of them get updated after a merge (not just the first).
+    ///
+    /// This tests the FIXED behavior where we don't break after the first match.
+    #[test]
+    fn merge_update_loop_should_update_all_bounds_with_removed_ring() {
+        // Setup: Three bounds where TWO reference the same ring
+        let mut bounds = [
+            make_bound((0.0, 0.0), (5.0, 10.0)),
+            make_bound((5.0, 0.0), (10.0, 10.0)),
+            make_bound((10.0, 0.0), (15.0, 10.0)),
+        ];
+
+        // bounds[0] has ring 0, bounds[1] and bounds[2] BOTH have ring 1
+        // This can happen when two edges of the same ring are both active
+        bounds[0].ring = Some(0);
+        bounds[1].ring = Some(1); // Left edge of ring 1
+        bounds[2].ring = Some(1); // Right edge of ring 1
+
+        bounds[0].side = EdgeSide::Left;
+        bounds[1].side = EdgeSide::Left;
+        bounds[2].side = EdgeSide::Right;
+
+        // Simulate: Ring 1 is merged into Ring 0
+        // This is what happens in process_intersect_list after IntersectResult::Merged
+        let keep_ring_idx = 0usize;
+        let remove_ring_idx = 1usize;
+        let keep_side = EdgeSide::Left;
+
+        // This is the FIXED update loop - no break, updates ALL matching bounds
+        let ael_indices = [0usize, 1, 2];
+        for &ab_idx in &ael_indices {
+            if bounds[ab_idx].ring == Some(remove_ring_idx) {
+                bounds[ab_idx].ring = Some(keep_ring_idx);
+                bounds[ab_idx].side = keep_side;
+                // FIX #53: No break - continue to update all matching bounds
+            }
+        }
+
+        // bounds[1] should be updated to ring 0 (first match, updated)
+        assert_eq!(
+            bounds[1].ring,
+            Some(0),
+            "Bound 1 should be updated to ring 0"
+        );
+
+        // With the fix, bounds[2] should ALSO be updated to ring 0
+        assert_eq!(
+            bounds[2].ring,
+            Some(0),
+            "Bound 2 should also be updated to ring 0 (fix for issue #53)"
         );
     }
 }

@@ -612,6 +612,14 @@ pub fn add_point_to_ring<T: CoordNum + Copy>(
         None => return,
     };
 
+    // DEBUG: Check if ring actually exists
+    if crate::debug::debug_enabled() && rings.get(ring_idx).is_none() {
+        eprintln!(
+            "[WARNING] add_point_to_ring: bound_idx={} has ring={} but ring does not exist! rings.len()={}",
+            bound_idx, ring_idx, rings.len()
+        );
+    }
+
     // PORT FROM: wagyu C++ add_point_to_ring (ring_util.hpp:319-337)
     // C++ uses a circular linked list where:
     //   - Left side points are inserted at the FRONT (bnd.ring->points = new_point)
@@ -863,6 +871,17 @@ pub fn append_ring<T: CoordNum + Copy>(
     active_bounds: &[usize],
     rings: &mut RingManager<T>,
 ) {
+    // DEBUG: Log all bounds' ring assignments before merge
+    if crate::debug::debug_enabled() {
+        eprintln!("[APPEND_RING_START] b1={} b2={}", b1_idx, b2_idx);
+        for &ab_idx in active_bounds {
+            eprintln!(
+                "  [BOUND_STATE] idx={} ring={:?} side={:?}",
+                ab_idx, bounds[ab_idx].ring, bounds[ab_idx].side
+            );
+        }
+    }
+
     let ring1_idx = match bounds[b1_idx].ring {
         Some(r) => r,
         None => return,
@@ -958,9 +977,28 @@ pub fn append_ring<T: CoordNum + Copy>(
     // Update any other active bounds that reference the removed ring
     for &ab_idx in active_bounds {
         if bounds[ab_idx].ring == Some(remove_ring_idx) {
+            if crate::debug::debug_enabled() {
+                eprintln!(
+                    "[BOUND_UPDATE] append_ring: ab_idx={} ring: {} -> {}, side: {:?}",
+                    ab_idx, remove_ring_idx, keep_ring_idx, keep_side
+                );
+            }
             bounds[ab_idx].ring = Some(keep_ring_idx);
             bounds[ab_idx].side = keep_side;
-            break; // C++ breaks after first match
+            // FIX #53: Don't break - update ALL bounds with removed ring
+            // C++ breaks because pointer comparison is unique.
+            // In Rust, multiple bounds can share the same ring index.
+        }
+    }
+
+    // DEBUG: Log all bounds' ring assignments after merge
+    if crate::debug::debug_enabled() {
+        eprintln!("[APPEND_RING_END] keep={} remove={}", keep_ring_idx, remove_ring_idx);
+        for &ab_idx in active_bounds {
+            eprintln!(
+                "  [BOUND_STATE] idx={} ring={:?} side={:?}",
+                ab_idx, bounds[ab_idx].ring, bounds[ab_idx].side
+            );
         }
     }
 }
