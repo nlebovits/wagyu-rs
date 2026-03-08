@@ -1,0 +1,20 @@
+{
+  "_comment": "Issue #55: Intersection list sorting with same-Y intersections",
+  "_description": "Two triangles both intersecting a third at the same Y levels (Y=18 and Y=2)",
+  "_bug": "When multiple intersections occur at the same Y, secondary sort criterion differs: C++ uses winding_count2 sum, Rust uses X coordinate. Also C++ uses std::stable_sort.",
+  "_operation": "union",
+  "_fill": "evenodd",
+  "subject": [
+    [
+      [[0, 0], [10, 10], [0, 20], [0, 0]]
+    ]
+  ],
+  "clip": [
+    [
+      [[2, 0], [12, 10], [2, 20], [2, 0]]
+    ],
+    [
+      [[-2, 0], [8, 10], [-2, 20], [-2, 0]]
+    ]
+  ]
+}
