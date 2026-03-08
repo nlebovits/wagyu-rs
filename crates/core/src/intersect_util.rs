@@ -558,11 +558,22 @@ fn add_local_minimum_point_at_intersection<T: CoordNum>(
     let ring = crate::Ring::new(vec![geo_types::Coord { x: pt.x, y: pt.y }]);
     let ring_idx = manager.add_ring(ring);
 
+    // Log the new ring creation (for debug parity with add_first_point in ring_util.rs)
+    if crate::debug::debug_enabled() {
+        crate::debug::log_ring_new(
+            ring_idx,
+            (pt.x.to_f64().unwrap_or(0.0), pt.y.to_f64().unwrap_or(0.0)),
+        );
+    }
+
     // Determine which bound gets left side based on dx
+    // PORT FROM: C++ ring_util.hpp line 360:
+    // if (is_horizontal(*b2.current_edge) || (b1.current_edge->dx > b2.current_edge->dx))
+    let b2_horizontal = b2.is_horizontal();
     let b1_dx = b1.current_edge().dx;
     let b2_dx = b2.current_edge().dx;
 
-    if b1_dx > b2_dx {
+    if b2_horizontal || b1_dx > b2_dx {
         b1.ring = Some(ring_idx);
         b1.side = EdgeSide::Left;
         b1.last_point = pt;
