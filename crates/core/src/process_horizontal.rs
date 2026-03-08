@@ -25,6 +25,7 @@ use crate::local_minimum::LocalMinimumList;
 use crate::local_minimum_util::insert_horizontal_local_minima_into_abl;
 use crate::point::Point;
 use crate::process_maxima::{do_maxima, get_maxima_pair, is_intermediate, is_maxima};
+use crate::config::EdgeSide;
 use crate::ring_util;
 use crate::scanbeam::Scanbeam;
 use crate::Operation;
@@ -266,9 +267,23 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
                     }
                 }
             }
-            IntersectResult::NewRing(_ring_idx) => {
-                // Hole state would be set here if needed
-                // For horizontal processing, this is typically not triggered
+            IntersectResult::NewRing(ring_idx) => {
+                // FIX for issue #69: Set parent/hole state for rings created during horizontal processing
+                // Find which bound owns this ring (the one with left side)
+                let owner_bound = if bounds[horz_idx].ring == Some(ring_idx)
+                    && bounds[horz_idx].side == EdgeSide::Left
+                {
+                    horz_idx
+                } else if bounds[next_idx].ring == Some(ring_idx)
+                    && bounds[next_idx].side == EdgeSide::Left
+                {
+                    next_idx
+                } else {
+                    // Fallback: use the horizontal bound
+                    horz_idx
+                };
+
+                ring_util::set_hole_state(owner_bound, ael.as_slice(), bounds, manager);
             }
             IntersectResult::None => {}
         }
@@ -458,9 +473,23 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
                     }
                 }
             }
-            IntersectResult::NewRing(_ring_idx) => {
-                // Hole state would be set here if needed
-                // For horizontal processing, this is typically not triggered
+            IntersectResult::NewRing(ring_idx) => {
+                // FIX for issue #69: Set parent/hole state for rings created during horizontal processing
+                // Find which bound owns this ring (the one with left side)
+                let owner_bound = if bounds[horz_idx].ring == Some(ring_idx)
+                    && bounds[horz_idx].side == EdgeSide::Left
+                {
+                    horz_idx
+                } else if bounds[prev_idx].ring == Some(ring_idx)
+                    && bounds[prev_idx].side == EdgeSide::Left
+                {
+                    prev_idx
+                } else {
+                    // Fallback: use the horizontal bound
+                    horz_idx
+                };
+
+                ring_util::set_hole_state(owner_bound, ael.as_slice(), bounds, manager);
             }
             IntersectResult::None => {}
         }
