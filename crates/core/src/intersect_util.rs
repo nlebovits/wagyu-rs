@@ -232,7 +232,9 @@ pub fn build_intersect_list<T>(
                             rounded.y.to_f64().unwrap_or(0.0),
                         ),
                     );
-                    intersects.push(IntersectNode::new(rounded, idx1, idx2));
+                    // PORT FROM: C++ intersect_list_sorter uses winding_count2 sum for tie-breaking
+                    let winding_count2_sum = b1.winding_count2 + b2.winding_count2;
+                    intersects.push(IntersectNode::new(rounded, idx1, idx2, winding_count2_sum));
                 }
                 // Swap in simulated order (not in actual AEL)
                 simulated_order.swap(i, i + 1);
