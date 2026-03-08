@@ -489,27 +489,56 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
     if let Some(keep_ring) = manager.get_mut(keep_idx) {
         let keep_points = keep_ring.points_mut();
 
+        // DIVERGENCE FROM WAGYU: The C++ uses a circular linked list where nodes
+        // are reconnected without duplication. In Rust with Vecs, we must check
+        // for duplicate points at the join and skip them to avoid creating
+        // spurious duplicates that would be incorrectly removed by topology correction.
         match (keep_side, remove_side) {
             (EdgeSide::Left, EdgeSide::Left) => {
                 // C++: reverse remove, prepend to keep (z y x a b c)
                 let mut reversed: Vec<_> = remove_points.into_iter().rev().collect();
+                // Skip duplicate at join point (last of reversed == first of keep)
+                if let (Some(rev_last), Some(keep_first)) = (reversed.last(), keep_points.first()) {
+                    if rev_last == keep_first {
+                        reversed.pop();
+                    }
+                }
                 reversed.append(keep_points);
                 *keep_points = reversed;
             }
             (EdgeSide::Left, EdgeSide::Right) => {
                 // C++: prepend remove to keep (x y z a b c)
                 let mut new_points = remove_points;
+                // Skip duplicate at join point (last of remove == first of keep)
+                if let (Some(rem_last), Some(keep_first)) = (new_points.last(), keep_points.first()) {
+                    if rem_last == keep_first {
+                        new_points.pop();
+                    }
+                }
                 new_points.append(keep_points);
                 *keep_points = new_points;
             }
             (EdgeSide::Right, EdgeSide::Right) => {
                 // C++: reverse remove, append to keep (a b c z y x)
-                let reversed: Vec<_> = remove_points.into_iter().rev().collect();
+                let mut reversed: Vec<_> = remove_points.into_iter().rev().collect();
+                // Skip duplicate at join point (last of keep == first of reversed)
+                if let (Some(keep_last), Some(rev_first)) = (keep_points.last(), reversed.first()) {
+                    if keep_last == rev_first {
+                        reversed.remove(0);
+                    }
+                }
                 keep_points.extend(reversed);
             }
             (EdgeSide::Right, EdgeSide::Left) => {
                 // C++: append remove to keep (a b c x y z)
-                keep_points.extend(remove_points);
+                let mut remove = remove_points;
+                // Skip duplicate at join point (last of keep == first of remove)
+                if let (Some(keep_last), Some(rem_first)) = (keep_points.last(), remove.first()) {
+                    if keep_last == rem_first {
+                        remove.remove(0);
+                    }
+                }
+                keep_points.extend(remove);
             }
         }
     }
