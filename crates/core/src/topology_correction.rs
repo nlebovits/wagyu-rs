@@ -1927,6 +1927,15 @@ fn process_collinear_edges_different_rings<T: CoordNum + Copy>(
     pt_a: PointRef,
     pt_b: PointRef,
 ) {
+    if crate::debug::debug_enabled() {
+        let parent_a = manager.get(pt_a.ring_idx).and_then(|r| r.parent());
+        let parent_b = manager.get(pt_b.ring_idx).and_then(|r| r.parent());
+        eprintln!(
+            "[COLLINEAR_DIFFERENT] ring_a={} ring_b={} parent_a={:?} parent_b={:?}",
+            pt_a.ring_idx, pt_b.ring_idx, parent_a, parent_b
+        );
+    }
+
     // Get the ring points before modification
     let points_a: Vec<Coord<T>> = match manager.get(pt_a.ring_idx) {
         Some(r) => r.points().to_vec(),
@@ -1981,19 +1990,25 @@ fn process_collinear_edges_different_rings<T: CoordNum + Copy>(
     }
 
     // Build merged ring by:
-    // 1. Go around ring A, skipping the shared edge (shared_a1 and shared_a2)
-    // 2. Continue with ring B, skipping the shared edge (shared_b1 and shared_b2)
+    // 1. Go around ring A, skipping the shared edge interior but keeping junction point
+    // 2. Continue with ring B, skipping the shared edge interior but keeping junction point
+    //
+    // FIX FOR ISSUE #68: Include the junction points (shared_a2 and shared_b2) to avoid
+    // losing the shared edge endpoints entirely. Without these, the merged ring would
+    // be missing 2 points from the expected output.
 
     let mut merged_points: Vec<Coord<T>> = Vec::new();
 
-    // From ring A: start after shared_a2, go around to shared_a1 (exclusive)
+    // From ring A: start at shared_a2 (include as junction), go around to shared_a1 (exclusive)
+    merged_points.push(points_a[shared_a2]);
     let mut i = next_idx(shared_a2, len_a);
     while i != shared_a1 {
         merged_points.push(points_a[i]);
         i = next_idx(i, len_a);
     }
 
-    // From ring B: start after shared_b2, go around to shared_b1 (exclusive)
+    // From ring B: start at shared_b2 (include as junction), go around to shared_b1 (exclusive)
+    merged_points.push(points_b[shared_b2]);
     let mut j = next_idx(shared_b2, len_b);
     while j != shared_b1 {
         merged_points.push(points_b[j]);
@@ -2083,19 +2098,32 @@ fn process_collinear_edges<T: CoordNum + Copy>(
     }
 
     // Step 1: Check for actual collinear edge (spike pattern)
-    if !has_collinear_edge(manager, pt_a, pt_b) {
+    let has_collinear = has_collinear_edge(manager, pt_a, pt_b);
+    if crate::debug::debug_enabled() {
+        eprintln!(
+            "[PROCESS_COLLINEAR] pt_a.ring={} pt_b.ring={} has_collinear={}",
+            pt_a.ring_idx, pt_b.ring_idx, has_collinear
+        );
+    }
+    if !has_collinear {
         // No collinear edge - nothing to do
         return false;
     }
 
     // Step 2: Dispatch based on whether they share a ring
     if pt_a.ring_idx == pt_b.ring_idx {
+        if crate::debug::debug_enabled() {
+            eprintln!("[PROCESS_COLLINEAR] -> same_ring branch");
+        }
         process_collinear_edges_same_ring(manager, pt_a, pt_b);
+        true
     } else {
+        if crate::debug::debug_enabled() {
+            eprintln!("[PROCESS_COLLINEAR] -> different_rings branch");
+        }
         process_collinear_edges_different_rings(manager, pt_a, pt_b);
+        true
     }
-
-    true
 }
 
 /// Process all pairs of points in a same-coordinate group.
@@ -2206,6 +2234,18 @@ pub fn correct_collinear_edges<T: CoordNum + Copy>(
     // Build sorted list of all points
     let all_points = build_all_points(manager);
 
+    if crate::debug::debug_enabled() {
+        eprintln!("[COLLINEAR_EDGES] all_points count={}", all_points.len());
+        for (pr, coord) in all_points.iter().take(10) {
+            eprintln!(
+                "[COLLINEAR_EDGES]   ring={} idx={} coord=({},{})",
+                pr.ring_idx, pr.point_idx,
+                coord.x.to_f64().unwrap_or(0.0),
+                coord.y.to_f64().unwrap_or(0.0)
+            );
+        }
+    }
+
     if all_points.len() < 2 {
         return;
     }
@@ -2231,6 +2271,16 @@ pub fn correct_collinear_edges<T: CoordNum + Copy>(
                 .iter()
                 .map(|(pr, _)| *pr)
                 .collect();
+
+            if crate::debug::debug_enabled() {
+                eprintln!(
+                    "[COLLINEAR_GROUP] coord=({},{}) size={} rings={:?}",
+                    group_coord.x.to_f64().unwrap_or(0.0),
+                    group_coord.y.to_f64().unwrap_or(0.0),
+                    group.len(),
+                    group.iter().map(|pr| pr.ring_idx).collect::<Vec<_>>()
+                );
+            }
 
             correct_collinear_repeats(manager, &group);
         }
@@ -2271,6 +2321,20 @@ pub fn correct_topology<T: CoordNum + Copy>(manager: &mut crate::build_result::R
     // This prevents collinear edge correction from incorrectly modifying
     // the kept rings based on stale points in merged rings.
     manager.clear_merged_rings();
+
+    // DEBUG: Log ring point counts after clear_merged_rings
+    if crate::debug::debug_enabled() {
+        for ring_idx in 0..manager.len() {
+            if let Some(ring) = manager.get(ring_idx) {
+                eprintln!(
+                    "[TOPOLOGY_RINGS] After clear_merged: ring {} has {} points, parent={:?}",
+                    ring_idx,
+                    ring.points().len(),
+                    ring.parent()
+                );
+            }
+        }
+    }
 
     // Step 1: Correct orientations
     // Ensures exterior rings are CCW (positive area) and holes are CW (negative area)
