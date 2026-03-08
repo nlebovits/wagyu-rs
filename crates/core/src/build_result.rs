@@ -509,6 +509,24 @@ fn build_polygon<T: CoordNum + Copy>(
         }
     };
 
+    // Fix for issue #64: Skip degenerate exterior rings (< 3 points)
+    // This is defensive - correct_tree should have already cleared these,
+    // but we check here to prevent any edge cases from leaking through.
+    if exterior_ring.points().len() < 3 {
+        // Process children to collect grandchildren even if exterior is degenerate
+        for &child_index in exterior_ring.children() {
+            if let Some(child_ring) = manager.get(child_index) {
+                for &grandchild_index in child_ring.children() {
+                    grandchildren.push(grandchild_index);
+                }
+            }
+        }
+        return (
+            Polygon::new(LineString::new(Vec::new()), Vec::new()),
+            grandchildren,
+        );
+    }
+
     // Convert exterior ring to LineString
     let exterior = ring_to_linestring(exterior_ring, reverse_output);
 
@@ -1189,6 +1207,54 @@ mod tests {
         assert!(
             !manager.top_level_rings().contains(&ring),
             "BUG #57: ring is still in top_level_rings after being assigned to a parent"
+        );
+    }
+
+    // ==================== Issue #64: Degenerate ring filtering tests ====================
+
+    /// Test that build_polygon skips degenerate exterior rings (< 3 points).
+    /// Fix for issue #64: Defensive filtering in build_polygon.
+    #[test]
+    fn build_polygon_skips_degenerate_exterior() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Create a degenerate ring with only 2 points
+        let mut degenerate: Ring<f64> = Ring::empty();
+        degenerate.push_point(Coord { x: 0.0, y: 0.0 });
+        degenerate.push_point(Coord { x: 10.0, y: 10.0 });
+        let degenerate_idx = manager.add_ring(degenerate);
+
+        // Build polygon from degenerate exterior
+        let (polygon, _grandchildren) = build_polygon(&manager, degenerate_idx, false);
+
+        // Should return empty polygon
+        assert!(
+            polygon.exterior().0.is_empty(),
+            "Degenerate exterior (< 3 points) should produce empty polygon"
+        );
+    }
+
+    /// Test that build_result filters out degenerate exterior rings.
+    #[test]
+    fn build_result_filters_degenerate_rings() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Add one valid ring
+        manager.add_ring(make_square_ring(10.0));
+
+        // Add one degenerate ring (only 2 points)
+        let mut degenerate: Ring<f64> = Ring::empty();
+        degenerate.push_point(Coord { x: 50.0, y: 50.0 });
+        degenerate.push_point(Coord { x: 60.0, y: 60.0 });
+        manager.add_ring(degenerate);
+
+        let result = build_result(&manager, false);
+
+        // Should only have 1 polygon (the valid one)
+        assert_eq!(
+            result.0.len(),
+            1,
+            "Degenerate rings should be filtered from build_result output"
         );
     }
 }

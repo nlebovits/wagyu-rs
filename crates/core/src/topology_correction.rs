@@ -652,9 +652,53 @@ fn correct_orientations<T: CoordNum + Copy>(manager: &mut crate::build_result::R
 /// 3. A ring becomes a child of the smallest ring that contains it
 ///    and has opposite orientation (exterior contains hole, hole contains exterior)
 fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManager<T>) {
-    use crate::ring_util::ring_area;
+    use crate::ring_util::{ring_area, value_is_zero};
 
-    // Collect ring data for sorting
+    // PORT FROM: C++ topology_correction.hpp lines 1275-1280
+    // First pass: Remove degenerate rings (< 3 points or zero area)
+    // C++ code:
+    //   if ((*itr)->points == nullptr) { continue; }
+    //   if ((*itr)->size() < 3 || value_is_zero((*itr)->area())) {
+    //       remove_ring_and_points(*itr, manager, false);
+    //       continue;
+    //   }
+    let indices: Vec<usize> = manager.ring_indices().collect();
+    let mut degenerate_indices: Vec<usize> = Vec::new();
+
+    for idx in &indices {
+        if let Some(ring) = manager.get(*idx) {
+            let points = ring.points();
+            if points.is_empty() {
+                // Already cleared, skip
+                continue;
+            }
+            if points.len() < 3 {
+                degenerate_indices.push(*idx);
+                continue;
+            }
+            let area = ring_area(points);
+            if value_is_zero(area) {
+                degenerate_indices.push(*idx);
+            }
+        }
+    }
+
+    // Clear degenerate rings (equivalent to C++ remove_ring_and_points)
+    for idx in degenerate_indices {
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[TOPOLOGY] correct_tree: clearing degenerate ring {} (< 3 points or zero area)",
+                idx
+            );
+        }
+        if let Some(ring) = manager.get_mut(idx) {
+            ring.points_mut().clear();
+        }
+        manager.clear_parent(idx);
+        manager.clear_children(idx);
+    }
+
+    // Collect ring data for sorting (only valid rings)
     let mut ring_data: Vec<(usize, f64, BBoxF64, bool)> = Vec::new();
 
     for idx in manager.ring_indices() {
@@ -664,6 +708,10 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
                 continue;
             }
             let area = ring_area(points);
+            if value_is_zero(area) {
+                // Already cleared above, skip
+                continue;
+            }
             if let Some(bbox) = BBoxF64::from_ring(points) {
                 // Determine hole status from area sign, NOT from stored flag
                 // PORT FROM: C++ ring.hpp is_hole() - negative area = clockwise = hole
@@ -5013,6 +5061,92 @@ mod tests {
         assert!(
             manager.top_level_rings().contains(&hole_idx),
             "Demoted hole should be added to top_level_rings"
+        );
+    }
+
+    // ==================== Issue #64: Degenerate ring filtering tests ====================
+
+    /// PORT FROM: C++ topology_correction.hpp lines 1278-1280
+    /// Test that correct_tree removes rings with < 3 points.
+    ///
+    /// C++ code:
+    /// ```cpp
+    /// if ((*itr)->size() < 3 || value_is_zero((*itr)->area())) {
+    ///     remove_ring_and_points(*itr, manager, false);
+    ///     continue;
+    /// }
+    /// ```
+    #[test]
+    fn test_correct_tree_removes_degenerate_rings_less_than_3_points() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Create a valid exterior ring (CCW = positive area)
+        let mut valid_ring: Ring<f64> = Ring::empty();
+        valid_ring.push_point(Coord { x: 0.0, y: 0.0 });
+        valid_ring.push_point(Coord { x: 100.0, y: 0.0 });
+        valid_ring.push_point(Coord { x: 100.0, y: 100.0 });
+        valid_ring.push_point(Coord { x: 0.0, y: 100.0 });
+        let valid_idx = manager.add_ring(valid_ring);
+
+        // Create a degenerate ring with only 2 points
+        let mut degenerate_ring: Ring<f64> = Ring::empty();
+        degenerate_ring.push_point(Coord { x: 50.0, y: 50.0 });
+        degenerate_ring.push_point(Coord { x: 60.0, y: 60.0 });
+        let degenerate_idx = manager.add_ring(degenerate_ring);
+
+        // Run correct_tree
+        correct_tree(&mut manager);
+
+        // Valid ring should still have points
+        assert!(
+            manager.get(valid_idx).unwrap().points().len() >= 3,
+            "Valid ring should still have >= 3 points"
+        );
+
+        // Degenerate ring should be cleared (0 points)
+        // PORT FROM: C++ remove_ring_and_points clears the points
+        assert_eq!(
+            manager.get(degenerate_idx).unwrap().points().len(),
+            0,
+            "Degenerate ring (< 3 points) should be cleared by correct_tree"
+        );
+    }
+
+    /// PORT FROM: C++ topology_correction.hpp lines 1278-1280
+    /// Test that correct_tree removes rings with zero area.
+    #[test]
+    fn test_correct_tree_removes_zero_area_rings() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // Create a valid exterior ring
+        let mut valid_ring: Ring<f64> = Ring::empty();
+        valid_ring.push_point(Coord { x: 0.0, y: 0.0 });
+        valid_ring.push_point(Coord { x: 100.0, y: 0.0 });
+        valid_ring.push_point(Coord { x: 100.0, y: 100.0 });
+        valid_ring.push_point(Coord { x: 0.0, y: 100.0 });
+        let valid_idx = manager.add_ring(valid_ring);
+
+        // Create a zero-area ring (collinear points)
+        let mut zero_area_ring: Ring<f64> = Ring::empty();
+        zero_area_ring.push_point(Coord { x: 10.0, y: 10.0 });
+        zero_area_ring.push_point(Coord { x: 20.0, y: 10.0 });
+        zero_area_ring.push_point(Coord { x: 30.0, y: 10.0 }); // All on same line
+        let zero_area_idx = manager.add_ring(zero_area_ring);
+
+        // Run correct_tree
+        correct_tree(&mut manager);
+
+        // Valid ring should still have points
+        assert!(
+            manager.get(valid_idx).unwrap().points().len() >= 3,
+            "Valid ring should still have >= 3 points"
+        );
+
+        // Zero-area ring should be cleared
+        assert_eq!(
+            manager.get(zero_area_idx).unwrap().points().len(),
+            0,
+            "Zero-area ring should be cleared by correct_tree"
         );
     }
 }
