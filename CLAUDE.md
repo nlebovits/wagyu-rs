@@ -120,4 +120,4 @@ Infrastructure exists in `RingManager` to track and clear merged rings:
 
 ## Current Status
 
-~39/148 golden tests passing. Main gaps: topology correction for complex hole arrangements.
+Main gaps: topology correction for complex hole arrangements. Run `cargo test --test golden` for current count.
