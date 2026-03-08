@@ -1796,15 +1796,26 @@ fn fix_collinear_path<T: CoordNum + Copy>(
         // so it can be removed. But for the wrap-around case, (10,0) is a CORNER,
         // so it must be kept.
 
-        let idx1 = path.start_1.point_idx.min(path.end_1.point_idx);
-        let idx2 = path.start_1.point_idx.max(path.end_1.point_idx);
+        // Check for wrap-around: if start_1 > end_1, the spike wraps around the ring
+        let is_wrap_around = path.start_1.point_idx > path.end_1.point_idx;
+        let spike_start = path.start_1.point_idx;
+        let spike_end = path.end_1.point_idx;
 
-        // Check if the duplicate point is on a straight edge (collinear with neighbors)
-        // If it's collinear, remove all spike points including both duplicates
-        // If it's a corner, keep one copy
-        let coord_dup = points[idx1]; // The duplicate coordinate
-        let prev_coord = points[prev_idx(idx1, len)];
-        let next_coord = points[next_idx(idx2, len)];
+        // For determining neighbors, we need the "outside" of the spike
+        let (neighbor_before, neighbor_after) = if is_wrap_around {
+            // Wrap-around: spike goes from spike_start → end of ring → spike_end
+            // Keep: spike_end+1 to spike_start-1 (the non-spike portion)
+            // Neighbors are just outside the spike
+            (prev_idx(spike_start, len), next_idx(spike_end, len))
+        } else {
+            // Non-wrap: spike goes from spike_start → spike_end
+            // Keep: 0 to spike_start-1 and spike_end+1 to len-1
+            (prev_idx(spike_start, len), next_idx(spike_end, len))
+        };
+
+        let coord_dup = points[spike_start]; // The duplicate coordinate
+        let prev_coord = points[neighbor_before];
+        let next_coord = points[neighbor_after];
 
         // Check if coord_dup is collinear with its neighbors
         let is_collinear_with_neighbors =
@@ -1812,20 +1823,36 @@ fn fix_collinear_path<T: CoordNum + Copy>(
 
         let mut new_points = Vec::with_capacity(len);
 
-        if is_collinear_with_neighbors {
-            // Remove all spike points including both duplicates
-            // Result: just the corners
-            for (i, &point) in points.iter().enumerate() {
-                if i < idx1 || i > idx2 {
-                    new_points.push(point);
+        if is_wrap_around {
+            // Wrap-around spike: remove points from spike_start to end AND from 0 to spike_end
+            // Keep points from spike_end+1 to spike_start-1
+            if is_collinear_with_neighbors {
+                // Remove both duplicate endpoints too
+                for i in (spike_end + 1)..spike_start {
+                    new_points.push(points[i]);
+                }
+            } else {
+                // Keep one copy of the duplicate (it's a corner)
+                // Keep spike_end (or spike_start, they're the same coord)
+                for i in spike_end..spike_start {
+                    new_points.push(points[i]);
                 }
             }
         } else {
-            // Keep one copy of the duplicate (it's a corner)
-            // Remove spike interior (idx1+1 to idx2 inclusive)
-            for (i, &point) in points.iter().enumerate() {
-                if i <= idx1 || i > idx2 {
-                    new_points.push(point);
+            // Non-wrap spike: standard case
+            if is_collinear_with_neighbors {
+                // Remove all spike points including both duplicates
+                for (i, &point) in points.iter().enumerate() {
+                    if i < spike_start || i > spike_end {
+                        new_points.push(point);
+                    }
+                }
+            } else {
+                // Keep one copy of the duplicate (it's a corner)
+                for (i, &point) in points.iter().enumerate() {
+                    if i <= spike_start || i > spike_end {
+                        new_points.push(point);
+                    }
                 }
             }
         }

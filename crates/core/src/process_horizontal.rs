@@ -189,7 +189,8 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
                 horz_idx,
                 bounds,
                 geo_types::Coord {
-                    x: T::from(intersection_x as i64).unwrap_or(scanline_y),
+                    // FIX: Use .round() instead of truncation to match C++ wround behavior
+                    x: T::from(intersection_x.round() as i64).unwrap_or(scanline_y),
                     y: scanline_y,
                 },
                 manager,
@@ -200,7 +201,8 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
         // This updates winding counts and handles ring swapping
         let horz_idx = ael.get(current_pos).unwrap();
         let intersection_pt = Point::new(
-            T::from(bounds[next_idx].current_x as i64).unwrap_or(scanline_y),
+            // FIX: Use .round() instead of truncation to match C++ wround behavior
+            T::from(bounds[next_idx].current_x.round() as i64).unwrap_or(scanline_y),
             scanline_y,
         );
 
@@ -385,7 +387,8 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
                 horz_idx,
                 bounds,
                 geo_types::Coord {
-                    x: T::from(intersection_x as i64).unwrap_or(scanline_y),
+                    // FIX: Use .round() instead of truncation to match C++ wround behavior
+                    x: T::from(intersection_x.round() as i64).unwrap_or(scanline_y),
                     y: scanline_y,
                 },
                 manager,
@@ -396,7 +399,8 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
         // Note: for right-to-left, the bound order is swapped (prev, horz) vs (horz, next)
         let horz_idx = ael.get(current_pos).unwrap();
         let intersection_pt = Point::new(
-            T::from(bounds[prev_idx].current_x as i64).unwrap_or(scanline_y),
+            // FIX: Use .round() instead of truncation to match C++ wround behavior
+            T::from(bounds[prev_idx].current_x.round() as i64).unwrap_or(scanline_y),
             scanline_y,
         );
 
