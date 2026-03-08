@@ -1,0 +1,19 @@
+{
+  "_comment": "Issue #72: xor_polygon_two_intersecting_holes_and_self_intersection",
+  "_description": "Complex polygon with self-intersecting holes XORed with a square",
+  "_bug": "Rust produces 11 polygons, C++ produces 12",
+  "_operation": "xor",
+  "_fill": "evenodd",
+  "subject": [
+    [
+      [[-3580, -406], [-392, 4575], [1263, -964], [-1211, -2262], [-3580, -406]],
+      [[1071, -2620], [-810, -161], [1681, 662], [2953, -1635], [1071, -2620]],
+      [[-5096, 5738], [4591, 5190], [-5235, -3856], [4765, -4262], [-5096, 5738]]
+    ]
+  ],
+  "clip": [
+    [
+      [[-2500, -2500], [-2500, 2500], [2500, 2500], [2500, -2500], [-2500, -2500]]
+    ]
+  ]
+}

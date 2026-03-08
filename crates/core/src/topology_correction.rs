@@ -763,6 +763,12 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
     // PORT FROM: C++ correct_tree (topology_correction.hpp lines 1262-1302)
     for i in 0..ring_data.len() {
         let (ring_idx, ring_area_val, ref ring_bbox, ring_is_hole) = ring_data[i];
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[CORRECT_TREE] ring {} area={:.0} is_hole={}",
+                ring_idx, ring_area_val, ring_is_hole
+            );
+        }
 
         // Get ring points once
         let ring_points: Vec<Coord<T>> = match manager.get(ring_idx) {
@@ -2239,7 +2245,8 @@ pub fn correct_collinear_edges<T: CoordNum + Copy>(
         for (pr, coord) in all_points.iter().take(10) {
             eprintln!(
                 "[COLLINEAR_EDGES]   ring={} idx={} coord=({},{})",
-                pr.ring_idx, pr.point_idx,
+                pr.ring_idx,
+                pr.point_idx,
                 coord.x.to_f64().unwrap_or(0.0),
                 coord.y.to_f64().unwrap_or(0.0)
             );
@@ -2615,13 +2622,48 @@ fn process_single_intersection<T: CoordNum + Copy>(
         return;
     }
 
+    // CRITICAL FIX: Validate that stored indices still point to the expected coordinates.
+    // After a merge operation, ring point arrays may be modified, making stored indices stale.
+    // In C++, point_ptr pointers remain valid because points are linked list nodes.
+    // In Rust, we use Vec indices which become invalid when the Vec is modified.
+    //
+    // If the current coordinate at the stored index doesn't match what we recorded,
+    // skip this pair - it will be re-processed in the next topology iteration.
+    {
+        let actual_coord_j = manager
+            .get(ring_j_idx)
+            .and_then(|r| r.points().get(pt_j.point_idx))
+            .copied();
+        let actual_coord_k = manager
+            .get(ring_k_idx)
+            .and_then(|r| r.points().get(pt_k.point_idx))
+            .copied();
+
+        let expected_coord = pt_j.coord; // Both should have the same coord (they're in the same group)
+
+        if actual_coord_j != Some(expected_coord) || actual_coord_k != Some(expected_coord) {
+            if crate::debug::debug_enabled() {
+                eprintln!(
+                    "[CHAIN_STALE] Skipping stale pair: ring {} idx {} expected {:?} got {:?}, ring {} idx {} expected {:?} got {:?}",
+                    ring_j_idx, pt_j.point_idx, expected_coord, actual_coord_j,
+                    ring_k_idx, pt_k.point_idx, expected_coord, actual_coord_k
+                );
+            }
+            return;
+        }
+    }
+
     // Get ring info
+    // CRITICAL: Compute is_hole from area sign, not stored flag.
+    // The stored flag may be stale after correct_orientations reverses points.
+    // PORT FROM: C++ is_hole() which calls recalculate_stats() if needed
     let (ring_j_is_hole, ring_j_parent) = {
         let ring = match manager.get(ring_j_idx) {
             Some(r) => r,
             None => return,
         };
-        (ring.is_hole(), ring.parent())
+        let is_hole = crate::ring_util::ring_area(ring.points()) < 0.0;
+        (is_hole, ring.parent())
     };
 
     let (ring_k_is_hole, ring_k_parent) = {
@@ -2629,7 +2671,8 @@ fn process_single_intersection<T: CoordNum + Copy>(
             Some(r) => r,
             None => return,
         };
-        (ring.is_hole(), ring.parent())
+        let is_hole = crate::ring_util::ring_area(ring.points()) < 0.0;
+        (is_hole, ring.parent())
     };
 
     // PORT FROM: C++ lines 482-485
@@ -2683,8 +2726,21 @@ fn process_single_intersection<T: CoordNum + Copy>(
         ring_j_parent
     };
 
+    if crate::debug::debug_enabled() {
+        eprintln!(
+            "[CHAIN_MERGE_CHECK] ring_origin={} ring_search={} origin_is_hole={} search_is_hole={} ring_parent={:?} search_parent={:?}",
+            ring_origin, ring_search,
+            if ring_j_idx == ring_origin { ring_j_is_hole } else { ring_k_is_hole },
+            if ring_k_idx == ring_search { ring_k_is_hole } else { ring_j_is_hole },
+            ring_parent_idx, ring_search_parent
+        );
+    }
+
     if ring_parent_idx != ring_search_parent {
         // Different parents - incompatible, skip
+        if crate::debug::debug_enabled() {
+            eprintln!("[CHAIN_MERGE_CHECK] SKIP - different parents");
+        }
         return;
     }
 
@@ -2700,9 +2756,23 @@ fn process_single_intersection<T: CoordNum + Copy>(
             if entry.ring2_idx == ring_origin {
                 found = true;
                 // Check position guard: the connection point must be at a different
-                // position than op_origin_1
-                let same_position =
-                    entry.point2_idx == op_origin_1.1 && entry.ring2_idx == op_origin_1.0;
+                // COORDINATE VALUE than op_origin_1
+                // PORT FROM: C++ line 536 - compares *op_origin_1 != *(it->second.op2)
+                // C++ compares actual point coordinates, NOT indices!
+                let same_position = {
+                    // Get the coordinate at op_origin_1
+                    let origin_coord = manager
+                        .get(op_origin_1.0)
+                        .and_then(|r| r.points().get(op_origin_1.1))
+                        .copied();
+                    // Get the coordinate at entry.point2
+                    let entry_coord = manager
+                        .get(entry.ring2_idx)
+                        .and_then(|r| r.points().get(entry.point2_idx))
+                        .copied();
+                    // Same position if coordinates match
+                    origin_coord.is_some() && origin_coord == entry_coord
+                };
                 if !same_position {
                     i_list.push_back((ring_search, *entry));
                     break;
@@ -2722,6 +2792,23 @@ fn process_single_intersection<T: CoordNum + Copy>(
 
                 // Skip if already visited, or invalid
                 if visited.contains(&it_ring) || it_ring == ring_search {
+                    continue;
+                }
+
+                // PORT FROM: C++ line 552 - *op_origin_2 != *it->second.op2
+                // Skip if the connection point has the same COORDINATE VALUE as op_origin_2
+                let same_coord = {
+                    let origin2_coord = manager
+                        .get(op_origin_2.0)
+                        .and_then(|r| r.points().get(op_origin_2.1))
+                        .copied();
+                    let entry_coord = manager
+                        .get(entry.ring2_idx)
+                        .and_then(|r| r.points().get(entry.point2_idx))
+                        .copied();
+                    origin2_coord.is_some() && origin2_coord == entry_coord
+                };
+                if same_coord {
                     continue;
                 }
 
@@ -2753,6 +2840,12 @@ fn process_single_intersection<T: CoordNum + Copy>(
                     op_origin_2,
                     (entry.ring2_idx, entry.point2_idx),
                 ) {
+                    if crate::debug::debug_enabled() {
+                        eprintln!(
+                            "[CHAIN_MERGE] CHAINED connection found via ring {}",
+                            it_ring
+                        );
+                    }
                     found = true;
                     i_list.push_front((ring_search, *entry));
                     break;
@@ -2767,6 +2860,21 @@ fn process_single_intersection<T: CoordNum + Copy>(
         let pair_origin =
             PointPtrPair::new(op_origin_1.0, op_origin_1.1, op_origin_2.0, op_origin_2.1);
         let pair_search = pair_origin.swap();
+
+        if crate::debug::debug_enabled() {
+            let coord1 = manager
+                .get(op_origin_1.0)
+                .and_then(|r| r.points().get(op_origin_1.1))
+                .copied();
+            let coord2 = manager
+                .get(op_origin_2.0)
+                .and_then(|r| r.points().get(op_origin_2.1))
+                .copied();
+            eprintln!(
+                "[CHAIN_CONNECT] Adding connection: ring {} ({:?}) <-> ring {} ({:?})",
+                ring_origin, coord1, ring_search, coord2
+            );
+        }
 
         connection_map
             .entry(ring_origin)
@@ -2899,11 +3007,17 @@ fn find_intersect_loop<T: CoordNum + Copy>(
             let it_ring2 = entry.ring2_idx;
 
             // Check if both rings are exterior (skip)
+            // PORT FROM: C++ line 116 - uses area-based is_hole check
+            // CRITICAL: We must compute is_hole from area sign, not from stored flag.
+            // The stored flag may be stale after correct_orientations reverses points.
             let ring1_is_hole = manager
                 .get(entry.ring1_idx)
-                .map(|r| r.is_hole())
+                .map(|r| crate::ring_util::ring_area(r.points()) < 0.0)
                 .unwrap_or(false);
-            let ring2_is_hole = manager.get(it_ring2).map(|r| r.is_hole()).unwrap_or(false);
+            let ring2_is_hole = manager
+                .get(it_ring2)
+                .map(|r| crate::ring_util::ring_area(r.points()) < 0.0)
+                .unwrap_or(false);
             if !ring1_is_hole && !ring2_is_hole {
                 continue;
             }
@@ -2914,9 +3028,22 @@ fn find_intersect_loop<T: CoordNum + Copy>(
                 let parent_ok = ring_parent_idx == Some(it_ring2)
                     || ring_parent_idx == manager.get(it_ring2).and_then(|r| r.parent());
 
-                // Position guards
-                let prev_pt_same = prev_pt == (entry.ring2_idx, entry.point2_idx);
-                let orig_pt_same = orig_pt == (entry.ring2_idx, entry.point2_idx);
+                // Position guards - PORT FROM: C++ line 121
+                // C++ compares *prev_pt != *it->second.op2 - COORDINATE VALUES, not indices
+                let entry_coord = manager
+                    .get(entry.ring2_idx)
+                    .and_then(|r| r.points().get(entry.point2_idx))
+                    .copied();
+                let prev_coord = manager
+                    .get(prev_pt.0)
+                    .and_then(|r| r.points().get(prev_pt.1))
+                    .copied();
+                let orig_coord = manager
+                    .get(orig_pt.0)
+                    .and_then(|r| r.points().get(orig_pt.1))
+                    .copied();
+                let prev_pt_same = entry_coord.is_some() && entry_coord == prev_coord;
+                let orig_pt_same = entry_coord.is_some() && entry_coord == orig_coord;
 
                 if parent_ok && !prev_pt_same && !orig_pt_same {
                     i_list.push_front((ring_search, *entry));
@@ -2953,8 +3080,17 @@ fn find_intersect_loop<T: CoordNum + Copy>(
                 continue;
             }
 
-            // Position guard
-            if prev_pt == (entry.ring2_idx, entry.point2_idx) {
+            // Position guard - PORT FROM: C++ line 135
+            // C++ compares *prev_pt == *it->second.op2 - COORDINATE VALUES, not indices
+            let prev_coord = manager
+                .get(prev_pt.0)
+                .and_then(|r| r.points().get(prev_pt.1))
+                .copied();
+            let entry_coord = manager
+                .get(entry.ring2_idx)
+                .and_then(|r| r.points().get(entry.point2_idx))
+                .copied();
+            if prev_coord.is_some() && prev_coord == entry_coord {
                 continue;
             }
 
@@ -4121,8 +4257,14 @@ mod tests {
         // still returns true because the ring was visited (not already corrected).
         // This matches C++ semantics - see topology_correction.hpp lines 453-469.
         let processed = correct_ring_self_intersections(&mut manager, ring_idx, false);
-        assert!(processed, "Should return true for any visited ring (C++ semantics)");
-        assert!(manager.is_corrected(ring_idx), "Ring should be marked corrected");
+        assert!(
+            processed,
+            "Should return true for any visited ring (C++ semantics)"
+        );
+        assert!(
+            manager.is_corrected(ring_idx),
+            "Ring should be marked corrected"
+        );
     }
 
     // ==================== correct_self_intersections Tests ====================
@@ -4163,7 +4305,10 @@ mod tests {
         // Even with no splits, should return true because rings were visited.
         // This matches C++ semantics where "visited" = "processed".
         let processed = correct_self_intersections(&mut manager, false);
-        assert!(processed, "Should return true when rings were visited (C++ semantics)");
+        assert!(
+            processed,
+            "Should return true when rings were visited (C++ semantics)"
+        );
     }
 
     #[test]
@@ -4788,21 +4933,21 @@ mod tests {
 
         // ring_a: CW hole (negative area) - left arrow
         let mut ring_a: Ring<f64> = Ring::empty();
-        ring_a.push_point(Coord { x: 0.0, y: 0.0 });   // idx 0
-        ring_a.push_point(Coord { x: 0.0, y: 10.0 });  // idx 1
+        ring_a.push_point(Coord { x: 0.0, y: 0.0 }); // idx 0
+        ring_a.push_point(Coord { x: 0.0, y: 10.0 }); // idx 1
         ring_a.push_point(Coord { x: 10.0, y: 10.0 }); // idx 2 - shared
-        ring_a.push_point(Coord { x: 5.0, y: 5.0 });   // idx 3
-        ring_a.push_point(Coord { x: 10.0, y: 0.0 });  // idx 4 - shared
+        ring_a.push_point(Coord { x: 5.0, y: 5.0 }); // idx 3
+        ring_a.push_point(Coord { x: 10.0, y: 0.0 }); // idx 4 - shared
         ring_a.set_hole(true);
         let ring_a_idx = manager.add_ring(ring_a);
 
         // ring_b: CW hole (negative area) - right arrow, will be absorbed
         let mut ring_b: Ring<f64> = Ring::empty();
-        ring_b.push_point(Coord { x: 10.0, y: 0.0 });  // idx 0 - shared with ring_a idx 4
-        ring_b.push_point(Coord { x: 15.0, y: 5.0 });  // idx 1
+        ring_b.push_point(Coord { x: 10.0, y: 0.0 }); // idx 0 - shared with ring_a idx 4
+        ring_b.push_point(Coord { x: 15.0, y: 5.0 }); // idx 1
         ring_b.push_point(Coord { x: 10.0, y: 10.0 }); // idx 2 - shared with ring_a idx 2
         ring_b.push_point(Coord { x: 20.0, y: 10.0 }); // idx 3
-        ring_b.push_point(Coord { x: 20.0, y: 0.0 });  // idx 4
+        ring_b.push_point(Coord { x: 20.0, y: 0.0 }); // idx 4
         ring_b.set_hole(true);
         let ring_b_idx = manager.add_ring(ring_b);
 
@@ -4922,19 +5067,19 @@ mod tests {
         // ring_a: exterior CCW, spans full 20x10 area (left + right halves)
         // Shared points with ring_b: idx 1=(10,0) and idx 4=(10,10)
         let mut ring_a: Ring<f64> = Ring::empty();
-        ring_a.push_point(Coord { x: 0.0, y: 0.0 });   // idx 0
-        ring_a.push_point(Coord { x: 10.0, y: 0.0 });  // idx 1 — shared with ring_b idx 0
-        ring_a.push_point(Coord { x: 20.0, y: 0.0 });  // idx 2
+        ring_a.push_point(Coord { x: 0.0, y: 0.0 }); // idx 0
+        ring_a.push_point(Coord { x: 10.0, y: 0.0 }); // idx 1 — shared with ring_b idx 0
+        ring_a.push_point(Coord { x: 20.0, y: 0.0 }); // idx 2
         ring_a.push_point(Coord { x: 20.0, y: 10.0 }); // idx 3
         ring_a.push_point(Coord { x: 10.0, y: 10.0 }); // idx 4 — shared with ring_b idx 3
-        ring_a.push_point(Coord { x: 0.0, y: 10.0 });  // idx 5
+        ring_a.push_point(Coord { x: 0.0, y: 10.0 }); // idx 5
         let ring_a_idx = manager.add_ring(ring_a);
 
         // ring_b: exterior CCW, spans the RIGHT 10x10 sub-rectangle
         // Will be absorbed by the merge operation
         let mut ring_b: Ring<f64> = Ring::empty();
-        ring_b.push_point(Coord { x: 10.0, y: 0.0 });  // idx 0 — shared with ring_a idx 1
-        ring_b.push_point(Coord { x: 20.0, y: 0.0 });  // idx 1
+        ring_b.push_point(Coord { x: 10.0, y: 0.0 }); // idx 0 — shared with ring_a idx 1
+        ring_b.push_point(Coord { x: 20.0, y: 0.0 }); // idx 1
         ring_b.push_point(Coord { x: 20.0, y: 10.0 }); // idx 2
         ring_b.push_point(Coord { x: 10.0, y: 10.0 }); // idx 3 — shared with ring_a idx 4
         let ring_b_idx = manager.add_ring(ring_b);
@@ -4986,10 +5131,7 @@ mod tests {
         let mut connection_map: ConnectionMap = HashMap::new();
         let i_list = {
             let mut deq = VecDeque::new();
-            deq.push_back((
-                ring_b_idx,
-                PointPtrPair::new(ring_a_idx, 4, ring_b_idx, 3),
-            ));
+            deq.push_back((ring_b_idx, PointPtrPair::new(ring_a_idx, 4, ring_b_idx, 3)));
             deq
         };
 
@@ -5035,12 +5177,7 @@ mod tests {
         // left-half child_ring at (1,1)-(4,4).
         let new_ring_pts = manager.get(new_ring_idx).unwrap().points().to_vec();
         let new_ring_area = ring_area(&new_ring_pts);
-        let contains = poly2_contains_poly1(
-            &child_pts,
-            child_area,
-            &new_ring_pts,
-            new_ring_area,
-        );
+        let contains = poly2_contains_poly1(&child_pts, child_area, &new_ring_pts, new_ring_area);
         assert!(
             contains,
             "Setup check: new_ring (area={:.1}) must geometrically contain child_ring \
@@ -5145,7 +5282,10 @@ mod tests {
 
         // Verify the ring has negative area (CW = hole)
         let area = crate::ring_util::ring_area(manager.get(hole_idx).unwrap().points());
-        assert!(area < 0.0, "Test setup: orphan ring must have negative area (CW)");
+        assert!(
+            area < 0.0,
+            "Test setup: orphan ring must have negative area (CW)"
+        );
 
         // Give it a stale parent (simulating previous topology operations)
         manager.set_parent(hole_idx, 999);
@@ -5180,7 +5320,10 @@ mod tests {
 
         // Verify the ring has negative area (CW = hole)
         let area = crate::ring_util::ring_area(manager.get(hole_idx).unwrap().points());
-        assert!(area < 0.0, "Test setup: orphan ring must have negative area (CW)");
+        assert!(
+            area < 0.0,
+            "Test setup: orphan ring must have negative area (CW)"
+        );
 
         // Run correct_tree
         correct_tree(&mut manager);
