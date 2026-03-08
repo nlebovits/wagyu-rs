@@ -113,6 +113,12 @@ impl<T: CoordNum> RingManager<T> {
     ///
     /// This maintains the bidirectional relationship between parent and child.
     pub fn set_parent(&mut self, child_index: usize, parent_index: usize) {
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[SET_PARENT] child={} parent={}",
+                child_index, parent_index
+            );
+        }
         // Set the child's parent
         if let Some(child) = self.rings.get_mut(child_index) {
             child.set_parent(Some(parent_index));
@@ -387,6 +393,43 @@ impl<T: CoordNum> RingManager<T> {
     /// Get the parent index of a ring.
     pub fn parent(&self, ring_idx: usize) -> Option<usize> {
         self.rings.get(ring_idx)?.parent()
+    }
+
+    /// Calculate the depth of a ring in the parent chain.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring.hpp - ring_depth (lines 405-415)
+    ///
+    /// Depth is the number of ancestors in the parent chain:
+    /// - Depth 0: No parent (top-level ring)
+    /// - Depth 1: One parent (child of top-level)
+    /// - Depth 2: Two ancestors (grandchild of top-level)
+    /// - etc.
+    ///
+    /// This is used to determine hole status structurally:
+    /// - Even depth (0, 2, 4, ...) = exterior
+    /// - Odd depth (1, 3, 5, ...) = hole
+    pub fn ring_depth(&self, ring_idx: usize) -> usize {
+        let mut depth = 0;
+        let mut current = self.parent(ring_idx);
+        while let Some(parent_idx) = current {
+            depth += 1;
+            current = self.parent(parent_idx);
+        }
+        depth
+    }
+
+    /// Determine if a ring is a hole based on its depth in the parent chain.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring.hpp - ring_is_hole (lines 418-423)
+    ///
+    /// C++ comment: "This is different than the 'normal' way of determining if
+    /// a ring is a hole or not because it uses the depth of the ring to
+    /// determine if it is a hole or not. This is only done initially when
+    /// rings are output from Vatti."
+    ///
+    /// Returns true if depth is odd (ring is a hole structurally).
+    pub fn depth_based_is_hole(&self, ring_idx: usize) -> bool {
+        self.ring_depth(ring_idx) & 1 == 1
     }
 
     /// Check if a ring has been processed by correct_self_intersections.
