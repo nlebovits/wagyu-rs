@@ -126,6 +126,17 @@ pub struct Bound<T: CoordNum> {
     ///
     /// Set during `build_local_minima_list` when edges are built from polygon rings.
     pub maximum_bound: Option<usize>,
+
+    /// Coordinates (x, y) where this bound's ring was cleared (became None).
+    ///
+    /// When bounds merge, they shouldn't create new rings at DIFFERENT points
+    /// on the same scanline. However, they CAN create new rings at the SAME point
+    /// (corner-touching case where two polygons share only a corner vertex).
+    ///
+    /// FIX for issue #54: Track both X and Y to distinguish:
+    /// - Spurious: merge at (10,10), new ring at (0,10) - BLOCK (different X)
+    /// - Legitimate: merge at (1,1), new ring at (1,1) - ALLOW (same point)
+    pub ring_cleared_at: Option<(T, T)>,
 }
 
 impl<T: CoordNum> Bound<T> {
@@ -161,6 +172,7 @@ impl<T: CoordNum> Bound<T> {
             ring: None,
             last_point,
             maximum_bound: None,
+            ring_cleared_at: None,
         }
     }
 
@@ -195,6 +207,7 @@ impl<T: CoordNum> Bound<T> {
             ring: None,
             last_point,
             maximum_bound: None,
+            ring_cleared_at: None,
         }
     }
 
@@ -222,6 +235,7 @@ impl<T: CoordNum> Bound<T> {
             ring: None,
             last_point: origin,
             maximum_bound: None,
+            ring_cleared_at: None,
         }
     }
 

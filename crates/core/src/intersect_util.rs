@@ -438,7 +438,7 @@ fn add_local_maximum_point_at_intersection<T: CoordNum + Copy>(
     } else if let (Some(ring1_idx), Some(ring2_idx)) = (b1.ring, b2.ring) {
         // Different rings - need to merge them
         // PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - append_ring
-        let merge_info = merge_rings_at_intersection(b1, b2, ring1_idx, ring2_idx, manager);
+        let merge_info = merge_rings_at_intersection(b1, b2, ring1_idx, ring2_idx, pt, manager);
         Some(merge_info)
     } else {
         None
@@ -457,6 +457,7 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
     b2: &mut Bound<T>,
     ring1_idx: usize,
     ring2_idx: usize,
+    pt: Point<T>,
     manager: &mut RingManager<T>,
 ) -> (usize, usize, EdgeSide) {
     // DEBUG: Log which bounds/rings are being merged
@@ -542,6 +543,12 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
     // Clear ring references on both bounds (they meet at max, so done contributing)
     b1.ring = None;
     b2.ring = None;
+
+    // Record the coordinates where these bounds' rings were cleared
+    // They can create new rings at the SAME point (corner-touching) but not
+    // at DIFFERENT points on the same scanline (spurious ring creation)
+    b1.ring_cleared_at = Some((pt.x, pt.y));
+    b2.ring_cleared_at = Some((pt.x, pt.y));
 
     // Return merge info for caller to update other bounds
     (keep_idx, remove_idx, keep_side)
@@ -700,7 +707,27 @@ pub fn intersect_bounds<T: CoordNum>(
         // Neither contributing - may start a new output region
         // PORT FROM: wagyu/include/mapbox/geometry/wagyu/intersect_util.hpp lines 217-270
         if b1.poly_type != b2.poly_type {
-            // Different polygon types - always add local minimum point
+            // FIX #54: Check if either bound's ring was cleared at a DIFFERENT point
+            // on the same scanline. This prevents spurious ring creation while allowing
+            // legitimate corner-touching cases.
+            //
+            // - Spurious: merge at (10,10), new ring at (0,10) - BLOCK (different X)
+            // - Legitimate: merge at (1,1), new ring at (1,1) - ALLOW (same point)
+            let b1_cleared_elsewhere = b1
+                .ring_cleared_at
+                .map_or(false, |(x, y)| y == pt.y && x != pt.x);
+            let b2_cleared_elsewhere = b2
+                .ring_cleared_at
+                .map_or(false, |(x, y)| y == pt.y && x != pt.x);
+
+            if b1_cleared_elsewhere || b2_cleared_elsewhere {
+                // Ring was cleared at a different X on this scanline - spurious
+                swap_sides(b1, b2);
+                swap_rings(b1, b2);
+                return IntersectResult::None;
+            }
+
+            // Different polygon types - add local minimum point
             let ring_idx = add_local_minimum_point_at_intersection(b1, b2, pt, manager);
             return IntersectResult::NewRing(ring_idx);
         } else if b1_wc == 1 && b2_wc == 1 {
