@@ -2755,7 +2755,7 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
     _connection_map: &mut ConnectionMap,
     _ring_origin: usize,
     _ring_search: usize,
-    _ring_parent_idx: Option<usize>,
+    ring_parent_idx: Option<usize>,
     op_origin_1: (usize, usize), // (ring_idx, point_idx)
     op_origin_2: (usize, usize),
     i_list: &VecDeque<(usize, PointPtrPair)>,
@@ -2915,11 +2915,22 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
         ring.set_corrected(false);
     }
 
-    // Clear all other involved rings (they've been absorbed)
+    // PORT FROM: C++ lines 652-660 - call ring1_replaces_ring2 for absorbed rings
+    // This transfers children of absorbed rings to the appropriate parent and clears them.
+    // C++: for (auto& iRing : iList) { ring1_replaces_ring2(origin_is_hole ? ring_origin : ring_origin->parent, ring_itr, manager); }
     for &ring_idx in &involved_rings {
         if ring_idx != ring_a_idx {
-            if let Some(ring) = manager.get_mut(ring_idx) {
-                ring.points_mut().clear();
+            let target = if origin_is_hole {
+                Some(ring_a_idx)
+            } else {
+                ring_parent_idx
+            };
+            manager.ring1_replaces_ring2(target, ring_idx);
+            if crate::debug::debug_enabled() {
+                eprintln!(
+                    "[TOPOLOGY] merge_rings_at_intersection: ring1_replaces_ring2({:?}, {}) - absorbed ring",
+                    target, ring_idx
+                );
             }
         }
     }
@@ -2937,6 +2948,33 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
                 new_ring_idx, ring_a_idx
             );
         }
+
+        // PORT FROM: C++ lines 667-673 - child-steal loop for hole case
+        // Check if any children of ring_parent now belong inside new_ring
+        // C++: for (auto c : ring_parent->children) { if (poly2_contains_poly1(c, ring_new)) { reassign_as_child(c, ring_new); } }
+        if let Some(parent_idx) = ring_parent_idx {
+            let new_ring_pts = manager.ring_points_cloned(new_ring_idx);
+            let new_ring_area = crate::ring_util::ring_area(&new_ring_pts);
+            // Clone children list to avoid borrow issues during iteration
+            let parent_children = manager.children(parent_idx);
+            for child_idx in parent_children {
+                if child_idx == new_ring_idx {
+                    continue; // Don't reassign the new ring to itself
+                }
+                let child_pts = manager.ring_points_cloned(child_idx);
+                let child_area = crate::ring_util::ring_area(&child_pts);
+                // poly2_contains_poly1(child, new_ring) means "new_ring contains child"
+                if poly2_contains_poly1(&child_pts, child_area, &new_ring_pts, new_ring_area) {
+                    manager.reassign_as_child(child_idx, new_ring_idx);
+                    if crate::debug::debug_enabled() {
+                        eprintln!(
+                            "[TOPOLOGY] merge_rings_at_intersection: child-steal: ring {} reassigned to new ring {}",
+                            child_idx, new_ring_idx
+                        );
+                    }
+                }
+            }
+        }
     } else {
         // New ring is a sibling (same parent as ring_origin)
         manager.assign_as_sibling(new_ring_idx, ring_a_idx);
@@ -2945,6 +2983,31 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
                 "[TOPOLOGY] merge_rings_at_intersection: new ring {} assigned as sibling of exterior {}",
                 new_ring_idx, ring_a_idx
             );
+        }
+
+        // PORT FROM: C++ lines 675-686 - child-steal loop for exterior case
+        // Check if any children of ring_origin now belong inside new_ring
+        // C++: for (auto c : ring_origin->children) { if (poly2_contains_poly1(c, ring_new)) { reassign_as_child(c, ring_new); } }
+        let new_ring_pts = manager.ring_points_cloned(new_ring_idx);
+        let new_ring_area = crate::ring_util::ring_area(&new_ring_pts);
+        // Clone children list to avoid borrow issues during iteration
+        let origin_children = manager.children(ring_a_idx);
+        for child_idx in origin_children {
+            if child_idx == new_ring_idx {
+                continue; // Don't reassign the new ring to itself
+            }
+            let child_pts = manager.ring_points_cloned(child_idx);
+            let child_area = crate::ring_util::ring_area(&child_pts);
+            // poly2_contains_poly1(child, new_ring) means "new_ring contains child"
+            if poly2_contains_poly1(&child_pts, child_area, &new_ring_pts, new_ring_area) {
+                manager.reassign_as_child(child_idx, new_ring_idx);
+                if crate::debug::debug_enabled() {
+                    eprintln!(
+                        "[TOPOLOGY] merge_rings_at_intersection: child-steal: ring {} reassigned to new ring {}",
+                        child_idx, new_ring_idx
+                    );
+                }
+            }
         }
     }
 
@@ -4438,6 +4501,326 @@ mod tests {
         assert_eq!(
             len_b_after, len_b_before,
             "Single shared point: hole should be unchanged"
+        );
+    }
+
+    // ==================== merge_rings_at_intersection: children transfer ====================
+
+    /// TDD RED test for Root Cause 1 (issue #48):
+    /// When merge_rings_at_intersection absorbs ring_b into ring_a, any children
+    /// of ring_b must be transferred to ring_a (via ring1_replaces_ring2 in C++).
+    /// The current Rust code only clears ring_b's points but never transfers its
+    /// children, so this test MUST FAIL until the fix is implemented.
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+    ///            correct_chained_rings lines (loop over iList calling ring1_replaces_ring2)
+    #[test]
+    fn test_merge_rings_transfers_children_of_absorbed_ring() {
+        // Test scenario: Two HOLES (CW, negative area) sharing boundary points.
+        // ring_b has a child (island). When ring_b is absorbed, its child must transfer to ring_a.
+        //
+        // Geometry: Two arrow-head shaped holes sharing their tips (5 points each).
+        // CW winding produces negative area (holes).
+        //
+        //   ring_a: CW hole (left arrow) - 5 vertices
+        //     (0,0) → (0,10) → (10,10) → (5,5) → (10,0)
+        //     shared: (10,0) at idx 4, (10,10) at idx 2
+        //
+        //   ring_b: CW hole (right arrow) - 5 vertices
+        //     (10,0) → (15,5) → (10,10) → (20,10) → (20,0)
+        //     shared: (10,0) at idx 0, (10,10) at idx 2
+        //
+        //   After swap, fragments will have >= 3 points each.
+
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // ring_a: CW hole (negative area) - left arrow
+        let mut ring_a: Ring<f64> = Ring::empty();
+        ring_a.push_point(Coord { x: 0.0, y: 0.0 });   // idx 0
+        ring_a.push_point(Coord { x: 0.0, y: 10.0 });  // idx 1
+        ring_a.push_point(Coord { x: 10.0, y: 10.0 }); // idx 2 - shared
+        ring_a.push_point(Coord { x: 5.0, y: 5.0 });   // idx 3
+        ring_a.push_point(Coord { x: 10.0, y: 0.0 });  // idx 4 - shared
+        ring_a.set_hole(true);
+        let ring_a_idx = manager.add_ring(ring_a);
+
+        // ring_b: CW hole (negative area) - right arrow, will be absorbed
+        let mut ring_b: Ring<f64> = Ring::empty();
+        ring_b.push_point(Coord { x: 10.0, y: 0.0 });  // idx 0 - shared with ring_a idx 4
+        ring_b.push_point(Coord { x: 15.0, y: 5.0 });  // idx 1
+        ring_b.push_point(Coord { x: 10.0, y: 10.0 }); // idx 2 - shared with ring_a idx 2
+        ring_b.push_point(Coord { x: 20.0, y: 10.0 }); // idx 3
+        ring_b.push_point(Coord { x: 20.0, y: 0.0 });  // idx 4
+        ring_b.set_hole(true);
+        let ring_b_idx = manager.add_ring(ring_b);
+
+        // ring_c: CCW island (positive area) inside ring_b
+        let mut ring_c: Ring<f64> = Ring::empty();
+        ring_c.push_point(Coord { x: 16.0, y: 2.0 });
+        ring_c.push_point(Coord { x: 19.0, y: 2.0 });
+        ring_c.push_point(Coord { x: 19.0, y: 8.0 });
+        ring_c.push_point(Coord { x: 16.0, y: 8.0 });
+        ring_c.set_hole(false);
+        let ring_c_idx = manager.add_ring(ring_c);
+
+        // Establish parent-child: ring_c is a child of ring_b
+        manager.set_parent(ring_c_idx, ring_b_idx);
+
+        // Verify setup
+        assert_eq!(manager.children(ring_b_idx), vec![ring_c_idx]);
+        assert_eq!(manager.parent(ring_c_idx), Some(ring_b_idx));
+        assert!(manager.ring_is_hole(ring_a_idx));
+        assert!(manager.ring_is_hole(ring_b_idx));
+
+        // Invoke merge: swap at (10,0), chain at (10,10)
+        let mut connection_map: ConnectionMap = HashMap::new();
+        let i_list = {
+            let mut deq = VecDeque::new();
+            deq.push_back((ring_b_idx, PointPtrPair::new(ring_a_idx, 2, ring_b_idx, 2)));
+            deq
+        };
+
+        merge_rings_at_intersection(
+            &mut manager,
+            &mut connection_map,
+            ring_a_idx,      // ring_origin (hole)
+            ring_b_idx,      // ring_search (hole)
+            None,            // ring_parent_idx
+            (ring_a_idx, 4), // op_origin_1: ring_a's (10,0)
+            (ring_b_idx, 0), // op_origin_2: ring_b's (10,0)
+            &i_list,
+        );
+
+        // After merge: ring_b must be absorbed
+        let ring_b_len = manager.get(ring_b_idx).map(|r| r.len()).unwrap_or(0);
+        assert_eq!(ring_b_len, 0, "ring_b must be absorbed");
+
+        // THE KEY ASSERTION: ring_c transferred to ring_a
+        let ring_a_children = manager.children(ring_a_idx);
+        assert!(
+            ring_a_children.contains(&ring_c_idx),
+            "ring_c must be transferred to ring_a's children, got: {:?}",
+            ring_a_children
+        );
+        assert_eq!(manager.parent(ring_c_idx), Some(ring_a_idx));
+    }
+
+    // ==================== merge_rings_at_intersection: child-steal loop ====================
+
+    /// TDD RED test for Root Cause 2 (issue #48):
+    /// After merge_rings_at_intersection creates new_ring and assigns it as a sibling of
+    /// ring_origin, it must check whether any of ring_origin's existing children are now
+    /// geometrically contained inside new_ring and reassign them (child-steal loop).
+    ///
+    /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+    ///            correct_chained_rings lines 661-686:
+    ///
+    ///   } else {
+    ///       assign_as_sibling(ring_new, ring_origin, manager);
+    ///       for (auto c : ring_origin->children) {
+    ///           if (c == nullptr) continue;
+    ///           if (poly2_contains_poly1(c, ring_new)) {
+    ///               reassign_as_child(c, ring_new, manager);
+    ///           }
+    ///       }
+    ///   }
+    ///
+    /// The current Rust code stops at `assign_as_sibling` and never runs the loop,
+    /// so this test MUST FAIL until the fix is implemented.
+    ///
+    /// Geometry:
+    ///
+    ///   ring_a (exterior, CCW, 6 pts) — spans the FULL 20×10 area:
+    ///     (0,0)→(10,0)→(20,0)→(20,10)→(10,10)→(0,10)
+    ///     Shared with ring_b at idx 1=(10,0) and idx 4=(10,10)
+    ///
+    ///   ring_b (exterior, CCW, 4 pts) — spans the RIGHT 10×10 area:
+    ///     (10,0)→(20,0)→(20,10)→(10,10)
+    ///     Shared with ring_a at idx 0=(10,0) and idx 3=(10,10)
+    ///
+    ///   child_ring (hole, CW, 4 pts) — a small hole inside the LEFT 10×10 area:
+    ///     (1,1)→(1,4)→(4,4)→(4,1)
+    ///     This is a child of ring_a.
+    ///
+    /// After merge_rings_at_intersection:
+    ///   Swap 1 (primary): ring_a[1]=(10,0) ↔ ring_b[0]=(10,0)
+    ///   Swap 2 (chain):   ring_a[4]=(10,10) ↔ ring_b[3]=(10,10)
+    ///
+    ///   Fragment 1 (from ring_a's intersection point, pool_idx_1):
+    ///     (10,0)→(20,0)→(20,10)→(10,10)→(0,10)→(0,0) — the FULL 20×10 outer boundary (6 pts)
+    ///   Fragment 2 (from ring_b's intersection point, pool_idx_2):
+    ///     (10,0)→(20,0)→(20,10)→(10,10) — the RIGHT 10×10 sub-rectangle (4 pts)
+    ///
+    ///   Since ring_a is NOT a hole (origin_is_hole=false):
+    ///     origin_fragment = fragment_2 → ring_a gets the RIGHT 10×10 rectangle
+    ///     new_fragment = fragment_1   → new_ring gets the FULL 20×10 rectangle
+    ///
+    ///   new_ring is assigned as sibling of ring_a (both top-level).
+    ///
+    ///   child_ring is inside the LEFT 10×10 area, which is covered by new_ring
+    ///   (the full 20×10 boundary) but NOT by ring_a (now only the right 10×10).
+    ///
+    ///   C++ child-steal loop: child_ring would be reassigned from ring_a to new_ring.
+    ///   Rust (buggy): child_ring stays as ring_a's child even though ring_a's new
+    ///   geometry no longer contains it.
+    #[test]
+    fn test_merge_rings_reassigns_contained_children_to_new_ring() {
+        let mut manager: RingManager<f64> = RingManager::new();
+
+        // ring_a: exterior CCW, spans full 20x10 area (left + right halves)
+        // Shared points with ring_b: idx 1=(10,0) and idx 4=(10,10)
+        let mut ring_a: Ring<f64> = Ring::empty();
+        ring_a.push_point(Coord { x: 0.0, y: 0.0 });   // idx 0
+        ring_a.push_point(Coord { x: 10.0, y: 0.0 });  // idx 1 — shared with ring_b idx 0
+        ring_a.push_point(Coord { x: 20.0, y: 0.0 });  // idx 2
+        ring_a.push_point(Coord { x: 20.0, y: 10.0 }); // idx 3
+        ring_a.push_point(Coord { x: 10.0, y: 10.0 }); // idx 4 — shared with ring_b idx 3
+        ring_a.push_point(Coord { x: 0.0, y: 10.0 });  // idx 5
+        let ring_a_idx = manager.add_ring(ring_a);
+
+        // ring_b: exterior CCW, spans the RIGHT 10x10 sub-rectangle
+        // Will be absorbed by the merge operation
+        let mut ring_b: Ring<f64> = Ring::empty();
+        ring_b.push_point(Coord { x: 10.0, y: 0.0 });  // idx 0 — shared with ring_a idx 1
+        ring_b.push_point(Coord { x: 20.0, y: 0.0 });  // idx 1
+        ring_b.push_point(Coord { x: 20.0, y: 10.0 }); // idx 2
+        ring_b.push_point(Coord { x: 10.0, y: 10.0 }); // idx 3 — shared with ring_a idx 4
+        let ring_b_idx = manager.add_ring(ring_b);
+
+        // child_ring: CW hole inside the LEFT 10x10 area (x: 1..4, y: 1..4)
+        // It is a child of ring_a.
+        // After the merge, ring_a's geometry shrinks to the RIGHT 10x10 sub-rectangle,
+        // so child_ring will be geometrically inside new_ring (the full 20x10 boundary)
+        // but NOT inside ring_a's new geometry. The child-steal loop must move it.
+        let mut child_ring: Ring<f64> = Ring::empty();
+        child_ring.push_point(Coord { x: 1.0, y: 1.0 });
+        child_ring.push_point(Coord { x: 1.0, y: 4.0 });
+        child_ring.push_point(Coord { x: 4.0, y: 4.0 });
+        child_ring.push_point(Coord { x: 4.0, y: 1.0 });
+        child_ring.set_hole(true);
+        let child_ring_idx = manager.add_ring(child_ring);
+
+        // Establish parent-child: child_ring is a child of ring_a
+        manager.set_parent(child_ring_idx, ring_a_idx);
+
+        // Verify setup
+        assert_eq!(
+            manager.children(ring_a_idx),
+            vec![child_ring_idx],
+            "Setup: child_ring must be a child of ring_a before merge"
+        );
+        assert_eq!(
+            manager.parent(child_ring_idx),
+            Some(ring_a_idx),
+            "Setup: child_ring's parent must be ring_a before merge"
+        );
+
+        // Verify child_ring is geometrically inside the LEFT half (x < 10),
+        // which confirms it will be inside new_ring (full 20x10) but not ring_a's
+        // post-merge right-half (x: 10..20).
+        let child_pts = manager.get(child_ring_idx).unwrap().points().to_vec();
+        let child_area = ring_area(&child_pts);
+        // child_ring is CW (hole orientation) so area is negative
+        assert!(
+            child_area < 0.0,
+            "Setup: child_ring should be CW (negative area), got {}",
+            child_area
+        );
+
+        // Invoke the merge: ring_a absorbs ring_b across the shared boundary.
+        // op_origin_1 = (ring_a, idx 1) = (10,0)
+        // op_origin_2 = (ring_b, idx 0) = (10,0)
+        // i_list = chain swap at ring_a idx 4 = (10,10) ↔ ring_b idx 3 = (10,10)
+        let mut connection_map: ConnectionMap = HashMap::new();
+        let i_list = {
+            let mut deq = VecDeque::new();
+            deq.push_back((
+                ring_b_idx,
+                PointPtrPair::new(ring_a_idx, 4, ring_b_idx, 3),
+            ));
+            deq
+        };
+
+        merge_rings_at_intersection(
+            &mut manager,
+            &mut connection_map,
+            ring_a_idx,      // ring_origin (exterior, not a hole)
+            ring_b_idx,      // ring_search (will be absorbed)
+            None,            // ring_parent_idx (no parent — both are top-level)
+            (ring_a_idx, 1), // op_origin_1: ring_a's (10,0) at index 1
+            (ring_b_idx, 0), // op_origin_2: ring_b's (10,0) at index 0
+            &i_list,
+        );
+
+        // After the merge, ring_b is absorbed (points cleared).
+        let ring_b_len = manager.get(ring_b_idx).map(|r| r.len()).unwrap_or(0);
+        assert_eq!(
+            ring_b_len, 0,
+            "ring_b must be absorbed (points cleared) after merge, \
+             but still has {} points",
+            ring_b_len
+        );
+
+        // A new ring must have been created for the second fragment.
+        // With ring_a=0, ring_b=1, child_ring=2, the new ring is at index 3.
+        let new_ring_idx = 3_usize;
+        assert!(
+            manager.get(new_ring_idx).is_some(),
+            "A new ring (idx={}) must be created by merge_rings_at_intersection",
+            new_ring_idx
+        );
+
+        // Verify the new ring has points (is not empty).
+        let new_ring_len = manager.get(new_ring_idx).map(|r| r.len()).unwrap_or(0);
+        assert!(
+            new_ring_len >= 3,
+            "new_ring must have >= 3 points after merge, got {}",
+            new_ring_len
+        );
+
+        // Verify new_ring geometrically contains child_ring.
+        // new_ring gets fragment_1 = the full 20x10 boundary, which contains the
+        // left-half child_ring at (1,1)-(4,4).
+        let new_ring_pts = manager.get(new_ring_idx).unwrap().points().to_vec();
+        let new_ring_area = ring_area(&new_ring_pts);
+        let contains = poly2_contains_poly1(
+            &child_pts,
+            child_area,
+            &new_ring_pts,
+            new_ring_area,
+        );
+        assert!(
+            contains,
+            "Setup check: new_ring (area={:.1}) must geometrically contain child_ring \
+             (area={:.1}) for the child-steal loop to be applicable. \
+             new_ring points: {:?}",
+            new_ring_area, child_area, new_ring_pts
+        );
+
+        // THE FAILING ASSERTION (Root Cause 2):
+        // The C++ child-steal loop iterates ring_origin's children and reassigns any
+        // that are geometrically inside new_ring. child_ring is inside new_ring but
+        // Rust does NOT run this loop, so child_ring stays as ring_a's child.
+        //
+        // Expected: child_ring's parent == new_ring_idx
+        // Actual (buggy): child_ring's parent == ring_a_idx (unchanged)
+        assert_eq!(
+            manager.parent(child_ring_idx),
+            Some(new_ring_idx),
+            "child_ring must be reassigned to new_ring by the child-steal loop \
+             (C++ lines 674-679), but parent is: {:?}. \
+             The Rust code is missing the loop that checks ring_origin's children \
+             for containment inside new_ring after assign_as_sibling.",
+            manager.parent(child_ring_idx)
+        );
+
+        // Also verify new_ring's children list contains child_ring.
+        let new_ring_children = manager.children(new_ring_idx);
+        assert!(
+            new_ring_children.contains(&child_ring_idx),
+            "new_ring's children list must contain child_ring after reassignment, \
+             but new_ring's children are: {:?}",
+            new_ring_children
         );
     }
 }
