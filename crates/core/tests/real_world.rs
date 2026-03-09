@@ -352,7 +352,7 @@ fn real_world_buildings_union_area_invariant() {
         }
         // First ring is exterior, rest are holes
         let ext_area = ring_area(&poly[0]);
-        let hole_area: f64 = poly.iter().skip(1).map(|r| ring_area(r)).sum();
+        let hole_area: f64 = poly.iter().skip(1).map(ring_area).sum();
         ext_area - hole_area
     }
 

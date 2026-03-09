@@ -3143,11 +3143,115 @@ struct PointInfo<T: CoordNum> {
     point_idx: usize,
 }
 
+/// Context for processing a single intersection between two rings.
+///
+/// This struct replaces a complex 5-tuple that was used internally in
+/// `process_single_intersection`. It captures the key information needed
+/// to track and process an intersection point shared by two rings.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+///            Variables assigned in lines 487-518 of `process_single_intersection`
+#[derive(Debug, Clone, Copy)]
+struct IntersectionContext {
+    /// The "origin" ring index - when one ring is exterior and one is hole,
+    /// this is the exterior ring. When both are holes, this is the first hole.
+    ring_origin: usize,
+
+    /// The "search" ring index - the other ring involved in the intersection.
+    ring_search: usize,
+
+    /// The parent ring index, if any. For exterior-hole pairs, this equals
+    /// `ring_origin`. For hole-hole pairs, this is the parent of the first hole.
+    ring_parent_idx: Option<usize>,
+
+    /// First point of the intersection: (ring_idx, point_idx).
+    /// Points to a vertex in `ring_origin`.
+    op_origin_1: (usize, usize),
+
+    /// Second point of the intersection: (ring_idx, point_idx).
+    /// Points to a vertex in `ring_search`.
+    op_origin_2: (usize, usize),
+}
+
 /// Connection map entry - tracks connections from one ring to others.
 ///
 /// PORT FROM: C++ uses `unordered_multimap<ring_ptr, point_ptr_pair>`
 /// In Rust we use `HashMap<usize, Vec<PointPtrPair>>`
 type ConnectionMap = HashMap<usize, Vec<PointPtrPair>>;
+
+// ============================================================================
+// Options Structs for Multi-Argument Functions
+// ============================================================================
+
+/// Parameters for `find_intersect_loop` DFS search.
+///
+/// Groups the search context parameters needed to find a loop back to the
+/// origin ring through the connection map.
+#[derive(Debug)]
+pub struct LoopSearchParams {
+    /// Parent ring index (if this is a hole, this is the containing exterior).
+    pub ring_parent_idx: Option<usize>,
+    /// The ring we're trying to find a path back to.
+    pub ring_origin: usize,
+    /// The ring currently being searched.
+    pub ring_search: usize,
+    /// Original point that started the search: `(ring_idx, point_idx)`.
+    pub orig_pt: (usize, usize),
+    /// Previous point in the search chain: `(ring_idx, point_idx)`.
+    pub prev_pt: (usize, usize),
+}
+
+impl LoopSearchParams {
+    /// Create a new search parameters struct.
+    pub fn new(
+        ring_parent_idx: Option<usize>,
+        ring_origin: usize,
+        ring_search: usize,
+        orig_pt: (usize, usize),
+        prev_pt: (usize, usize),
+    ) -> Self {
+        Self {
+            ring_parent_idx,
+            ring_origin,
+            ring_search,
+            orig_pt,
+            prev_pt,
+        }
+    }
+}
+
+/// Context for `merge_rings_at_intersection` operation.
+///
+/// Groups the parameters needed for merging two or more rings at their
+/// shared intersection points.
+#[derive(Debug)]
+pub struct MergeContext<'a> {
+    /// Parent ring index for relationship assignment.
+    pub ring_parent_idx: Option<usize>,
+    /// First origin point: `(ring_idx, point_idx)`.
+    pub op_origin_1: (usize, usize),
+    /// Second origin point: `(ring_idx, point_idx)`.
+    pub op_origin_2: (usize, usize),
+    /// Chain of intersection point pairs for multi-ring merges.
+    pub i_list: &'a VecDeque<(usize, PointPtrPair)>,
+}
+
+impl<'a> MergeContext<'a> {
+    /// Create a new merge context.
+    pub fn new(
+        ring_parent_idx: Option<usize>,
+        op_origin_1: (usize, usize),
+        op_origin_2: (usize, usize),
+        i_list: &'a VecDeque<(usize, PointPtrPair)>,
+    ) -> Self {
+        Self {
+            ring_parent_idx,
+            op_origin_1,
+            op_origin_2,
+            i_list,
+        }
+    }
+}
 
 /// Correct rings that share boundary points ("chained rings").
 ///
@@ -3365,41 +3469,41 @@ fn process_single_intersection<T: CoordNum + Copy>(
 
     // PORT FROM: C++ lines 487-518
     // Determine ring_origin, ring_search, ring_parent, and point assignments
-    #[allow(clippy::type_complexity)] // TODO(#95): Refactor tuple to named struct
-    let (ring_origin, ring_search, ring_parent_idx, op_origin_1, op_origin_2): (
-        usize,
-        usize,
-        Option<usize>,
-        (usize, usize), // (ring_idx, point_idx)
-        (usize, usize),
-    ) = if !ring_j_is_hole {
+    let ctx = if !ring_j_is_hole {
         // ring_j is exterior (not hole), ring_k is hole
-        (
-            ring_j_idx,
-            ring_k_idx,
-            Some(ring_j_idx), // ring_parent = ring_origin for exterior
-            (ring_j_idx, pt_j.point_idx),
-            (ring_k_idx, pt_k.point_idx),
-        )
+        IntersectionContext {
+            ring_origin: ring_j_idx,
+            ring_search: ring_k_idx,
+            ring_parent_idx: Some(ring_j_idx), // ring_parent = ring_origin for exterior
+            op_origin_1: (ring_j_idx, pt_j.point_idx),
+            op_origin_2: (ring_k_idx, pt_k.point_idx),
+        }
     } else if !ring_k_is_hole {
         // ring_k is exterior, ring_j is hole
-        (
-            ring_k_idx,
-            ring_j_idx,
-            Some(ring_k_idx),
-            (ring_k_idx, pt_k.point_idx),
-            (ring_j_idx, pt_j.point_idx),
-        )
+        IntersectionContext {
+            ring_origin: ring_k_idx,
+            ring_search: ring_j_idx,
+            ring_parent_idx: Some(ring_k_idx),
+            op_origin_1: (ring_k_idx, pt_k.point_idx),
+            op_origin_2: (ring_j_idx, pt_j.point_idx),
+        }
     } else {
         // Both are holes - use ring_j as origin, parent is ring_j's parent
-        (
-            ring_j_idx,
-            ring_k_idx,
-            ring_j_parent,
-            (ring_j_idx, pt_j.point_idx),
-            (ring_k_idx, pt_k.point_idx),
-        )
+        IntersectionContext {
+            ring_origin: ring_j_idx,
+            ring_search: ring_k_idx,
+            ring_parent_idx: ring_j_parent,
+            op_origin_1: (ring_j_idx, pt_j.point_idx),
+            op_origin_2: (ring_k_idx, pt_k.point_idx),
+        }
     };
+
+    // Extract fields for easier use (these may be reassigned later)
+    let ring_origin = ctx.ring_origin;
+    let ring_search = ctx.ring_search;
+    let ring_parent_idx = ctx.ring_parent_idx;
+    let op_origin_1 = ctx.op_origin_1;
+    let op_origin_2 = ctx.op_origin_2;
 
     // PORT FROM: C++ lines 514-518
     // Check parent compatibility
@@ -3512,16 +3616,19 @@ fn process_single_intersection<T: CoordNum + Copy>(
                 }
 
                 // Try to find loop through this connection
+                let search_params = LoopSearchParams::new(
+                    ring_parent_idx,
+                    ring_origin,
+                    it_ring,
+                    op_origin_2,
+                    (entry.ring2_idx, entry.point2_idx),
+                );
                 if find_intersect_loop(
                     manager,
                     connection_map,
                     &mut i_list,
-                    ring_parent_idx,
-                    ring_origin,
-                    it_ring,
                     &mut visited,
-                    op_origin_2,
-                    (entry.ring2_idx, entry.point2_idx),
+                    &search_params,
                 ) {
                     if crate::debug::debug_enabled() {
                         eprintln!(
@@ -3645,16 +3752,8 @@ fn process_single_intersection<T: CoordNum + Copy>(
 
     // PORT FROM: C++ lines 606-734
     // We have a cycle - perform the merge
-    merge_rings_at_intersection(
-        manager,
-        connection_map,
-        ring_origin,
-        ring_search,
-        ring_parent_idx,
-        op_origin_1,
-        op_origin_2,
-        &i_list,
-    );
+    let merge_ctx = MergeContext::new(ring_parent_idx, op_origin_1, op_origin_2, &i_list);
+    merge_rings_at_intersection(manager, &merge_ctx);
 }
 
 /// Search for a loop back to ring_origin through the connection map.
@@ -3664,18 +3763,15 @@ fn process_single_intersection<T: CoordNum + Copy>(
 ///
 /// This is a DFS that searches for a chain of connections that leads back
 /// to ring_origin, building the i_list as it goes.
-#[allow(clippy::too_many_arguments)] // TODO(#95): Refactor to options struct
 fn find_intersect_loop<T: CoordNum + Copy>(
     manager: &crate::build_result::RingManager<T>,
     connection_map: &ConnectionMap,
     i_list: &mut VecDeque<(usize, PointPtrPair)>,
-    ring_parent_idx: Option<usize>,
-    ring_origin: usize,
-    ring_search: usize,
     visited: &mut HashSet<usize>,
-    orig_pt: (usize, usize), // (ring_idx, point_idx)
-    prev_pt: (usize, usize),
+    params: &LoopSearchParams,
 ) -> bool {
+    let ring_search = params.ring_search;
+
     // PORT FROM: C++ lines 110-127 - Check for direct connection
     if let Some(entries) = connection_map.get(&ring_search) {
         for entry in entries {
@@ -3703,10 +3799,10 @@ fn find_intersect_loop<T: CoordNum + Copy>(
             }
 
             // Check for cycle back to origin
-            if it_ring2 == ring_origin {
+            if it_ring2 == params.ring_origin {
                 // Check parent compatibility
-                let parent_ok = ring_parent_idx == Some(it_ring2)
-                    || ring_parent_idx == manager.get(it_ring2).and_then(|r| r.parent());
+                let parent_ok = params.ring_parent_idx == Some(it_ring2)
+                    || params.ring_parent_idx == manager.get(it_ring2).and_then(|r| r.parent());
 
                 // Position guards - PORT FROM: C++ line 121
                 // C++ compares *prev_pt != *it->second.op2 - COORDINATE VALUES, not indices
@@ -3715,12 +3811,12 @@ fn find_intersect_loop<T: CoordNum + Copy>(
                     .and_then(|r| r.points().get(entry.point2_idx))
                     .copied();
                 let prev_coord = manager
-                    .get(prev_pt.0)
-                    .and_then(|r| r.points().get(prev_pt.1))
+                    .get(params.prev_pt.0)
+                    .and_then(|r| r.points().get(params.prev_pt.1))
                     .copied();
                 let orig_coord = manager
-                    .get(orig_pt.0)
-                    .and_then(|r| r.points().get(orig_pt.1))
+                    .get(params.orig_pt.0)
+                    .and_then(|r| r.points().get(params.orig_pt.1))
                     .copied();
                 let prev_pt_same = entry_coord.is_some() && entry_coord == prev_coord;
                 let orig_pt_same = entry_coord.is_some() && entry_coord == orig_coord;
@@ -3747,7 +3843,7 @@ fn find_intersect_loop<T: CoordNum + Copy>(
 
             // Check parent compatibility
             let it_ring_parent = manager.get(it_ring).and_then(|r| r.parent());
-            if ring_parent_idx != Some(it_ring) && ring_parent_idx != it_ring_parent {
+            if params.ring_parent_idx != Some(it_ring) && params.ring_parent_idx != it_ring_parent {
                 continue;
             }
 
@@ -3763,8 +3859,8 @@ fn find_intersect_loop<T: CoordNum + Copy>(
             // Position guard - PORT FROM: C++ line 135
             // C++ compares *prev_pt == *it->second.op2 - COORDINATE VALUES, not indices
             let prev_coord = manager
-                .get(prev_pt.0)
-                .and_then(|r| r.points().get(prev_pt.1))
+                .get(params.prev_pt.0)
+                .and_then(|r| r.points().get(params.prev_pt.1))
                 .copied();
             let entry_coord = manager
                 .get(entry.ring2_idx)
@@ -3774,18 +3870,15 @@ fn find_intersect_loop<T: CoordNum + Copy>(
                 continue;
             }
 
-            // Recurse
-            if find_intersect_loop(
-                manager,
-                connection_map,
-                i_list,
-                ring_parent_idx,
-                ring_origin,
+            // Recurse with updated search params
+            let next_params = LoopSearchParams::new(
+                params.ring_parent_idx,
+                params.ring_origin,
                 it_ring,
-                visited,
-                orig_pt,
+                params.orig_pt,
                 (entry.ring2_idx, entry.point2_idx),
-            ) {
+            );
+            if find_intersect_loop(manager, connection_map, i_list, visited, &next_params) {
                 i_list.push_front((ring_search, *entry));
                 return true;
             }
@@ -3808,23 +3901,16 @@ fn find_intersect_loop<T: CoordNum + Copy>(
 /// 3. Apply all swap operations (primary + chain) to this map
 /// 4. Traverse from each origin to build exactly 2 fragments
 /// 5. Assign fragments to rings, clear absorbed rings
-#[allow(clippy::too_many_arguments)] // TODO(#95): Refactor to options struct
 fn merge_rings_at_intersection<T: CoordNum + Copy>(
     manager: &mut crate::build_result::RingManager<T>,
-    _connection_map: &mut ConnectionMap,
-    _ring_origin: usize,
-    _ring_search: usize,
-    ring_parent_idx: Option<usize>,
-    op_origin_1: (usize, usize), // (ring_idx, point_idx)
-    op_origin_2: (usize, usize),
-    i_list: &VecDeque<(usize, PointPtrPair)>,
+    ctx: &MergeContext<'_>,
 ) {
-    let (ring_a_idx, point_a_idx) = op_origin_1;
-    let (ring_b_idx, point_b_idx) = op_origin_2;
+    let (ring_a_idx, point_a_idx) = ctx.op_origin_1;
+    let (ring_b_idx, point_b_idx) = ctx.op_origin_2;
 
     // Collect all rings involved in this merge (primary + chain)
     let mut involved_rings: Vec<usize> = vec![ring_a_idx, ring_b_idx];
-    for (_chain_ring_idx, pair) in i_list.iter() {
+    for (_chain_ring_idx, pair) in ctx.i_list.iter() {
         if !involved_rings.contains(&pair.ring1_idx) {
             involved_rings.push(pair.ring1_idx);
         }
@@ -3887,7 +3973,7 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
     next_map[pool_idx_2] = next_1;
 
     // Apply chain swaps
-    for (_chain_ring_idx, pair) in i_list.iter() {
+    for (_chain_ring_idx, pair) in ctx.i_list.iter() {
         let Some(pool_idx_s1) = get_pool_idx(pair.ring1_idx, pair.point1_idx) else {
             continue;
         };
@@ -4017,7 +4103,7 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
         // PORT FROM: C++ lines 667-673 - child-steal loop for hole case
         // Check if any children of ring_parent now belong inside new_ring
         // C++: for (auto c : ring_parent->children) { if (poly2_contains_poly1(c, ring_new)) { reassign_as_child(c, ring_new); } }
-        if let Some(parent_idx) = ring_parent_idx {
+        if let Some(parent_idx) = ctx.ring_parent_idx {
             let new_ring_pts = manager.ring_points_cloned(new_ring_idx);
             let new_ring_area = crate::ring_util::ring_area(&new_ring_pts);
             // Clone children list to avoid borrow issues during iteration
@@ -5663,23 +5749,20 @@ mod tests {
         assert!(manager.ring_is_hole(ring_b_idx));
 
         // Invoke merge: swap at (10,0), chain at (10,10)
-        let mut connection_map: ConnectionMap = HashMap::new();
+        let _connection_map: ConnectionMap = HashMap::new();
         let i_list = {
             let mut deq = VecDeque::new();
             deq.push_back((ring_b_idx, PointPtrPair::new(ring_a_idx, 2, ring_b_idx, 2)));
             deq
         };
 
-        merge_rings_at_intersection(
-            &mut manager,
-            &mut connection_map,
-            ring_a_idx,      // ring_origin (hole)
-            ring_b_idx,      // ring_search (hole)
+        let merge_ctx = MergeContext::new(
             None,            // ring_parent_idx
             (ring_a_idx, 4), // op_origin_1: ring_a's (10,0)
             (ring_b_idx, 0), // op_origin_2: ring_b's (10,0)
             &i_list,
         );
+        merge_rings_at_intersection(&mut manager, &merge_ctx);
 
         // After merge: ring_b must be absorbed
         let ring_b_len = manager.get(ring_b_idx).map(|r| r.len()).unwrap_or(0);
@@ -5821,23 +5904,20 @@ mod tests {
         // op_origin_1 = (ring_a, idx 1) = (10,0)
         // op_origin_2 = (ring_b, idx 0) = (10,0)
         // i_list = chain swap at ring_a idx 4 = (10,10) ↔ ring_b idx 3 = (10,10)
-        let mut connection_map: ConnectionMap = HashMap::new();
+        let _connection_map: ConnectionMap = HashMap::new();
         let i_list = {
             let mut deq = VecDeque::new();
             deq.push_back((ring_b_idx, PointPtrPair::new(ring_a_idx, 4, ring_b_idx, 3)));
             deq
         };
 
-        merge_rings_at_intersection(
-            &mut manager,
-            &mut connection_map,
-            ring_a_idx,      // ring_origin (exterior, not a hole)
-            ring_b_idx,      // ring_search (will be absorbed)
-            None,            // ring_parent_idx (no parent — both are top-level)
+        let merge_ctx = MergeContext::new(
+            None,            // ring_parent_idx (no parent - both are top-level)
             (ring_a_idx, 1), // op_origin_1: ring_a's (10,0) at index 1
             (ring_b_idx, 0), // op_origin_2: ring_b's (10,0) at index 0
             &i_list,
         );
+        merge_rings_at_intersection(&mut manager, &merge_ctx);
 
         // After the merge, ring_b is absorbed (points cleared).
         let ring_b_len = manager.get(ring_b_idx).map(|r| r.len()).unwrap_or(0);

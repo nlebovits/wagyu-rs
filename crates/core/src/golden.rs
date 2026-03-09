@@ -499,9 +499,10 @@ mod tests {
     // This function will be used to run all golden tests once BooleanOp is
     // implemented. For now, it's a template.
 
-    /// Run a single golden test case
+    /// Run a single golden test case.
     ///
-    /// This is marked `allow(dead_code)` because it's a template for future use.
+    /// Template function for loading fixtures and comparing against expected output.
+    /// Will be used when additional golden test fixtures are created.
     #[allow(dead_code)]
     fn run_golden_test(
         subject_file: &str,
