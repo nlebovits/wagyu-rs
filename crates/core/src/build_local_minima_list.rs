@@ -15,6 +15,7 @@
 use crate::bound::{Bound, Edge};
 use crate::build_edges::{build_edge_list, EdgeList};
 use crate::config::{EdgeSide, PolygonType};
+use crate::debug_log;
 use crate::local_minimum::{LocalMinimum, LocalMinimumList};
 use crate::point::Point;
 use geo_types::CoordNum;
@@ -196,6 +197,78 @@ fn create_bound_towards_maximum<T: CoordNum>(edges: &mut EdgeList<T>) -> EdgeLis
     result
 }
 
+/// Move leading horizontal edges from left bound to right bound.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/local_minimum_util.hpp line 176
+///
+/// When a local minimum has horizontal edges at its base, we want all those
+/// horizontal segments to be on the right bound. This function:
+/// 1. Takes all leading horizontal edges from `left_edges`
+/// 2. Reverses each edge's X direction (swaps bot.x and top.x)
+/// 3. Reverses the order of these horizontal edges
+/// 4. Moves them to the FRONT of `right_edges`
+///
+/// This matches the C++ implementation:
+/// ```cpp
+/// void move_horizontals_on_left_to_right(bound<T>& left_bound, bound<T>& right_bound) {
+///     auto edge_itr = left_bound.edges.begin();
+///     while (edge_itr != left_bound.edges.end()) {
+///         if (!is_horizontal(*edge_itr)) break;
+///         reverse_horizontal(*edge_itr);
+///         ++edge_itr;
+///     }
+///     if (edge_itr == left_bound.edges.begin()) return;
+///     std::reverse(left_bound.edges.begin(), edge_itr);
+///     auto dist = std::distance(left_bound.edges.begin(), edge_itr);
+///     std::move(left_bound.edges.begin(), edge_itr, std::back_inserter(right_bound.edges));
+///     left_bound.edges.erase(left_bound.edges.begin(), edge_itr);
+///     std::rotate(right_bound.edges.begin(), std::prev(right_bound.edges.end(), dist), right_bound.edges.end());
+/// }
+/// ```
+fn move_horizontals_on_left_to_right<T: CoordNum + ToPrimitive>(
+    left_edges: &mut EdgeList<T>,
+    right_edges: &mut EdgeList<T>,
+) {
+    // Find all leading horizontal edges and reverse their X direction
+    let mut horizontal_count = 0;
+    for edge in left_edges.iter_mut() {
+        if !edge.is_horizontal() {
+            break;
+        }
+        // Reverse the horizontal edge (swap bot.x and top.x)
+        reverse_horizontal(edge);
+        horizontal_count += 1;
+    }
+
+    // If no horizontal edges at the start, nothing to do
+    if horizontal_count == 0 {
+        return;
+    }
+
+    debug_log!("[MOVE_HORIZ] Moving {} horizontal edges: left has {} edges, right has {} edges",
+        horizontal_count, left_edges.len(), right_edges.len());
+    for (i, e) in left_edges.iter().take(horizontal_count).enumerate() {
+        debug_log!("[MOVE_HORIZ]   H{}: bot=({},{}) top=({},{})",
+            i, e.bot.x.to_f64().unwrap_or(0.0), e.bot.y.to_f64().unwrap_or(0.0),
+            e.top.x.to_f64().unwrap_or(0.0), e.top.y.to_f64().unwrap_or(0.0));
+    }
+
+    // Extract the horizontal edges from left
+    let mut horizontals: Vec<_> = left_edges.drain(0..horizontal_count).collect();
+
+    // Reverse the order of horizontal edges (C++: std::reverse)
+    horizontals.reverse();
+
+    // Insert at the front of right_edges (C++ does: move to back, then rotate to front)
+    // In Rust, we can just splice at the beginning
+    for (i, h) in horizontals.into_iter().enumerate() {
+        right_edges.insert(i, h);
+    }
+
+    debug_log!("[MOVE_HORIZ] After move: left has {} edges, right has {} edges",
+        left_edges.len(), right_edges.len());
+}
+
 /// Fix horizontal edge directions in a bound to maintain connectivity.
 ///
 /// From C++: `fix_horizontals(bound)`
@@ -279,7 +352,8 @@ pub fn add_ring_to_local_minima_list<T: CoordNum>(
             return;
         }
 
-        // Determine which bound is left vs right
+        // Determine which bound is left vs right, and move horizontals if needed
+        // PORT FROM: wagyu/include/mapbox/geometry/wagyu/local_minimum_util.hpp lines 236-250
         let minimum_is_left = if lm_minimum_has_horizontal {
             let max_x = to_maximum[to_max_first_non_h_idx]
                 .bot
@@ -291,7 +365,20 @@ pub fn add_ring_to_local_minima_list<T: CoordNum>(
                 .x
                 .to_f64()
                 .unwrap_or(0.0);
-            max_x > min_x
+            if max_x > min_x {
+                // minimum_is_left = true
+                // TODO(#78): Enable this once Vatti horizontal processing is fixed
+                // The move_horizontals function is correct, but enabling it exposes
+                // a bug in process_horizontal_right_to_left that corrupts AEL ordering.
+                // See: https://github.com/nlebovits/wagyu-rs/issues/78
+                // move_horizontals_on_left_to_right(&mut to_minimum, &mut to_maximum);
+                true
+            } else {
+                // minimum_is_left = false
+                // TODO(#78): Enable this once Vatti horizontal processing is fixed
+                // move_horizontals_on_left_to_right(&mut to_maximum, &mut to_minimum);
+                false
+            }
         } else {
             to_maximum[to_max_first_non_h_idx].dx <= to_minimum[to_min_first_non_h_idx].dx
         };
@@ -669,5 +756,130 @@ mod tests {
         let edges: EdgeList<f64> = vec![];
         add_ring_to_local_minima_list(edges, &mut minima_list, PolygonType::Subject);
         assert!(minima_list.is_empty());
+    }
+
+    // ==================== Move Horizontals Tests ====================
+
+    #[test]
+    fn move_horizontals_no_horizontals_does_nothing() {
+        // When left_bound has no horizontal edges at the start, nothing should move
+        let mut left: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 0.0), Point::new(5.0, 10.0)), // Non-horizontal
+        ];
+        let mut right: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 0.0), Point::new(-5.0, 10.0)), // Non-horizontal
+        ];
+
+        let left_before = left.clone();
+        let right_before = right.clone();
+
+        move_horizontals_on_left_to_right(&mut left, &mut right);
+
+        // Nothing should change
+        assert_eq!(left.len(), left_before.len());
+        assert_eq!(right.len(), right_before.len());
+    }
+
+    #[test]
+    fn move_horizontals_single_horizontal_moves_to_right() {
+        // Left bound starts with one horizontal edge, should move to right
+        let mut left: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 5.0), Point::new(10.0, 5.0)), // Horizontal
+            Edge::new(Point::new(10.0, 5.0), Point::new(15.0, 15.0)), // Non-horizontal
+        ];
+        let mut right: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 5.0), Point::new(-5.0, 15.0)), // Non-horizontal
+        ];
+
+        move_horizontals_on_left_to_right(&mut left, &mut right);
+
+        // Left should now have only the non-horizontal edge
+        assert_eq!(left.len(), 1);
+        assert!(!left[0].is_horizontal());
+
+        // Right should now have 2 edges, with the horizontal at the front
+        assert_eq!(right.len(), 2);
+        assert!(right[0].is_horizontal());
+    }
+
+    #[test]
+    fn move_horizontals_reverses_horizontal_x_direction() {
+        // The horizontal edge should have its X direction reversed (swap bot.x and top.x)
+        let mut left: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 5.0), Point::new(10.0, 5.0)), // Horizontal: bot.x=0, top.x=10
+            Edge::new(Point::new(10.0, 5.0), Point::new(15.0, 15.0)), // Non-horizontal
+        ];
+        let mut right: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 5.0), Point::new(-5.0, 15.0)),
+        ];
+
+        move_horizontals_on_left_to_right(&mut left, &mut right);
+
+        // After moving, the horizontal edge should have reversed X: bot.x=10, top.x=0
+        let moved_horizontal = &right[0];
+        assert!(moved_horizontal.is_horizontal());
+        assert_eq!(moved_horizontal.bot.x, 10.0);
+        assert_eq!(moved_horizontal.top.x, 0.0);
+    }
+
+    #[test]
+    fn move_horizontals_multiple_horizontals_reversed_order() {
+        // Multiple leading horizontals should be moved AND reversed in order
+        // C++ does: reverse(begin, itr) then move to right
+        let mut left: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 5.0), Point::new(5.0, 5.0)),   // H1: 0->5
+            Edge::new(Point::new(5.0, 5.0), Point::new(10.0, 5.0)),  // H2: 5->10
+            Edge::new(Point::new(10.0, 5.0), Point::new(15.0, 15.0)), // Non-horizontal
+        ];
+        let mut right: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 5.0), Point::new(-5.0, 15.0)),
+        ];
+
+        move_horizontals_on_left_to_right(&mut left, &mut right);
+
+        // Left should have only the non-horizontal
+        assert_eq!(left.len(), 1);
+        assert!(!left[0].is_horizontal());
+
+        // Right should have 3 edges: 2 horizontals at front (reversed order), then original
+        assert_eq!(right.len(), 3);
+        assert!(right[0].is_horizontal());
+        assert!(right[1].is_horizontal());
+        assert!(!right[2].is_horizontal());
+
+        // The order should be reversed: H2 first, then H1 (and both with X reversed)
+        // Original H1 was 0->5, after reverse_horizontal: 5->0
+        // Original H2 was 5->10, after reverse_horizontal: 10->5
+        // After std::reverse of [H1, H2] we get [H2, H1]
+        // So right[0] should be H2 (reversed): bot.x=10, top.x=5
+        // And right[1] should be H1 (reversed): bot.x=5, top.x=0
+        assert_eq!(right[0].bot.x, 10.0);
+        assert_eq!(right[0].top.x, 5.0);
+        assert_eq!(right[1].bot.x, 5.0);
+        assert_eq!(right[1].top.x, 0.0);
+    }
+
+    #[test]
+    fn move_horizontals_places_at_front_of_right() {
+        // Moved horizontals should go to the FRONT of right_bound, not the back
+        // C++ uses rotate to achieve this
+        let mut left: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 5.0), Point::new(10.0, 5.0)), // Horizontal
+            Edge::new(Point::new(10.0, 5.0), Point::new(15.0, 15.0)), // Non-horizontal
+        ];
+        let mut right: EdgeList<f64> = vec![
+            Edge::new(Point::new(0.0, 5.0), Point::new(-5.0, 10.0)),
+            Edge::new(Point::new(-5.0, 10.0), Point::new(-10.0, 15.0)),
+        ];
+
+        let original_right_first = right[0].clone();
+
+        move_horizontals_on_left_to_right(&mut left, &mut right);
+
+        // The horizontal should now be first
+        assert!(right[0].is_horizontal());
+        // The original first edge should now be second
+        assert_eq!(right[1].bot, original_right_first.bot);
+        assert_eq!(right[1].top, original_right_first.top);
     }
 }
