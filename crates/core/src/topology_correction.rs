@@ -1651,35 +1651,124 @@ fn find_start_and_end_of_collinear_edges<T: CoordNum>(
     let len_b = ring_b.points().len();
     let same_ring = pt_a.ring_idx == pt_b.ring_idx;
 
-    // For same-ring spikes, we need a simpler approach:
-    // Find the range of indices between pt_a and pt_b that form the spike
+    // PORT FROM: C++ find_start_and_end_of_collinear_edges (lines 936-1025)
+    //
+    // For same-ring case, we use the same bidirectional walk as different-ring.
+    // The C++ uses linked-list pointer identity for spike detection, which maps to
+    // index identity in our Vec representation.
     if same_ring {
-        // The spike is the shorter path between the two duplicate points
-        let idx1 = pt_a.point_idx.min(pt_b.point_idx);
-        let idx2 = pt_a.point_idx.max(pt_b.point_idx);
+        let len = len_a;
+        let points = ring_a.points();
+        let ring_idx = pt_a.ring_idx;
 
-        // Forward distance: idx2 - idx1
-        // Backward distance: len - (idx2 - idx1)
-        let forward_dist = idx2 - idx1;
-        let backward_dist = len_a - forward_dist;
+        // Phase 1: Search backward on A, forward on B
+        // (back starts at pt_a, forward starts at pt_b)
+        let mut back = pt_a.point_idx;
+        let mut forward = pt_b.point_idx;
+        let mut first = true;
+        let max_iter = len * 2;
+        let mut iter_count = 0;
 
-        if forward_dist <= backward_dist {
-            // The spike is between idx1 and idx2
-            return Some(CollinearPath {
-                start_1: PointRef::new(pt_a.ring_idx, idx1),
-                end_1: PointRef::new(pt_a.ring_idx, idx2),
-                start_2: PointRef::new(pt_b.ring_idx, idx2),
-                end_2: PointRef::new(pt_b.ring_idx, idx1),
-            });
-        } else {
-            // The spike wraps around (the other direction is shorter)
-            return Some(CollinearPath {
-                start_1: PointRef::new(pt_a.ring_idx, idx2),
-                end_1: PointRef::new(pt_a.ring_idx, idx1),
-                start_2: PointRef::new(pt_b.ring_idx, idx1),
-                end_2: PointRef::new(pt_b.ring_idx, idx2),
-            });
+        loop {
+            iter_count += 1;
+            if iter_count > max_iter {
+                break;
+            }
+
+            // Skip duplicate points going backward
+            while points[prev_idx(back, len)] == points[back] && back != forward {
+                back = prev_idx(back, len);
+                if back == pt_a.point_idx {
+                    break;
+                }
+            }
+            if back == forward {
+                back = prev_idx(back, len);
+                forward = next_idx(forward, len);
+                break;
+            }
+            // Skip duplicate points going forward
+            while points[next_idx(forward, len)] == points[forward] && back != forward {
+                forward = next_idx(forward, len);
+                if forward == pt_b.point_idx {
+                    break;
+                }
+            }
+            if !first && (back == pt_a.point_idx || forward == pt_b.point_idx) {
+                break;
+            }
+            if back == forward {
+                back = prev_idx(back, len);
+                forward = next_idx(forward, len);
+                break;
+            }
+            back = prev_idx(back, len);
+            forward = next_idx(forward, len);
+            first = false;
+
+            if points[back] != points[forward] {
+                break;
+            }
         }
+        let start_a = next_idx(back, len);
+        let end_b = prev_idx(forward, len);
+
+        // Phase 2: Search backward on B, forward on A
+        let mut back = pt_b.point_idx;
+        let mut forward = pt_a.point_idx;
+        let mut first = true;
+        iter_count = 0;
+
+        loop {
+            iter_count += 1;
+            if iter_count > max_iter {
+                break;
+            }
+
+            // Skip duplicate points going backward
+            while points[prev_idx(back, len)] == points[back] && back != forward {
+                back = prev_idx(back, len);
+                if back == pt_b.point_idx {
+                    break;
+                }
+            }
+            if back == forward {
+                back = prev_idx(back, len);
+                forward = next_idx(forward, len);
+                break;
+            }
+            // Skip duplicate points going forward
+            while points[next_idx(forward, len)] == points[forward] && back != forward {
+                forward = next_idx(forward, len);
+                if forward == pt_a.point_idx {
+                    break;
+                }
+            }
+            if !first && (back == pt_b.point_idx || forward == pt_a.point_idx) {
+                break;
+            }
+            if back == forward || (!first && (back == end_b || forward == start_a)) {
+                back = prev_idx(back, len);
+                forward = next_idx(forward, len);
+                break;
+            }
+            back = prev_idx(back, len);
+            forward = next_idx(forward, len);
+            first = false;
+
+            if points[back] != points[forward] {
+                break;
+            }
+        }
+        let start_b = next_idx(back, len);
+        let end_a = prev_idx(forward, len);
+
+        return Some(CollinearPath {
+            start_1: PointRef::new(ring_idx, start_a),
+            end_1: PointRef::new(ring_idx, end_a),
+            start_2: PointRef::new(ring_idx, start_b),
+            end_2: PointRef::new(ring_idx, end_b),
+        });
     }
 
     // Different rings case: extend in both directions
@@ -1770,8 +1859,14 @@ fn find_start_and_end_of_collinear_edges<T: CoordNum>(
 ///            fix_collinear_path (lines 849-933)
 ///
 /// This performs the actual "surgery" on the rings to remove the collinear stretch.
-/// For a spike like A -> spike_tip -> A, we remove the spike tip and one duplicate,
-/// keeping one copy of the base point.
+///
+/// For same-ring cases, this handles three scenarios:
+/// 1. Both ends are spikes: remove the entire ring
+/// 2. One end is a spike: remove the spike, keep one ring
+/// 3. Neither end is a spike (cross-wire): split into two separate rings
+///
+/// The C++ uses linked-list pointer identity for spike detection. In our Vec
+/// representation, we use index identity (same index = same "pointer").
 fn fix_collinear_path<T: CoordNum + Copy>(
     manager: &mut crate::build_result::RingManager<T>,
     path: CollinearPath,
@@ -1781,9 +1876,9 @@ fn fix_collinear_path<T: CoordNum + Copy>(
     if same_ring {
         let ring_idx = path.start_1.ring_idx;
 
-        let ring = match manager.get_mut(ring_idx) {
-            Some(r) => r,
-            None => {
+        let points: Vec<Coord<T>> = match manager.get(ring_idx) {
+            Some(r) if !r.points().is_empty() => r.points().to_vec(),
+            _ => {
                 return CollinearResult {
                     pt1: None,
                     pt2: None,
@@ -1791,101 +1886,273 @@ fn fix_collinear_path<T: CoordNum + Copy>(
             }
         };
 
-        let points = ring.points_mut();
         let len = points.len();
 
         if len <= 3 {
-            points.clear();
+            if let Some(r) = manager.get_mut(ring_idx) {
+                r.points_mut().clear();
+            }
             return CollinearResult {
                 pt1: None,
                 pt2: None,
             };
         }
 
-        // For same-ring spikes, we need to remove the spike interior and one duplicate.
-        // Keep ONE copy of the base point.
-        //
-        // Example 1: Ring [0,1,2,3,4,5,6] where index 1 and 3 are both at (5,0), index 2 is spike tip
-        //   idx1 = 1, idx2 = 3
-        //   Check if idx1 is on an edge (has neighbors with different coordinates)
-        //   If so, keep idx1, remove idx1+1 to idx2 inclusive
-        //   Result: [0,1,4,5,6]... but we want [0,4,5,6] = 4 points
-        //
-        // For the simple square+spike case, (5,0) lies ON the edge from (0,0) to (10,0),
-        // so it can be removed. But for the wrap-around case, (10,0) is a CORNER,
-        // so it must be kept.
+        // PORT FROM: C++ fix_collinear_path lines 860-861
+        // C++ uses pointer identity (same node = same pointer). In Vec, same index = same "pointer".
+        let spike_left = path.start_1.point_idx == path.end_2.point_idx;
+        let spike_right = path.start_2.point_idx == path.end_1.point_idx;
 
-        // Check for wrap-around: if start_1 > end_1, the spike wraps around the ring
-        let is_wrap_around = path.start_1.point_idx > path.end_1.point_idx;
-        let spike_start = path.start_1.point_idx;
-        let spike_end = path.end_1.point_idx;
-
-        // For determining neighbors, we need the "outside" of the spike
-        let (neighbor_before, neighbor_after) = if is_wrap_around {
-            // Wrap-around: spike goes from spike_start → end of ring → spike_end
-            // Keep: spike_end+1 to spike_start-1 (the non-spike portion)
-            // Neighbors are just outside the spike
-            (prev_idx(spike_start, len), next_idx(spike_end, len))
-        } else {
-            // Non-wrap: spike goes from spike_start → spike_end
-            // Keep: 0 to spike_start-1 and spike_end+1 to len-1
-            (prev_idx(spike_start, len), next_idx(spike_end, len))
-        };
-
-        let coord_dup = points[spike_start]; // The duplicate coordinate
-        let prev_coord = points[neighbor_before];
-        let next_coord = points[neighbor_after];
-
-        // Check if coord_dup is collinear with its neighbors
-        let is_collinear_with_neighbors =
-            points_are_collinear(&prev_coord, &coord_dup, &next_coord);
-
-        let mut new_points = Vec::with_capacity(len);
-
-        if is_wrap_around {
-            // Wrap-around spike: remove points from spike_start to end AND from 0 to spike_end
-            // Keep points from spike_end+1 to spike_start-1
-            if is_collinear_with_neighbors {
-                // Remove both duplicate endpoints too
-                new_points.extend(points[(spike_end + 1)..spike_start].iter().copied());
-            } else {
-                // Keep one copy of the duplicate (it's a corner)
-                // Keep spike_end (or spike_start, they're the same coord)
-                new_points.extend(points[spike_end..spike_start].iter().copied());
+        if spike_left && spike_right {
+            // Both ends are spikes: remove the entire ring
+            // PORT FROM: C++ lines 863-873
+            if let Some(r) = manager.get_mut(ring_idx) {
+                r.points_mut().clear();
             }
-        } else {
-            // Non-wrap spike: standard case
-            if is_collinear_with_neighbors {
-                // Remove all spike points including both duplicates
-                for (i, &point) in points.iter().enumerate() {
-                    if i < spike_start || i > spike_end {
-                        new_points.push(point);
-                    }
-                }
-            } else {
-                // Keep one copy of the duplicate (it's a corner)
-                for (i, &point) in points.iter().enumerate() {
-                    if i <= spike_start || i > spike_end {
-                        new_points.push(point);
-                    }
-                }
-            }
-        }
-
-        if new_points.len() < 3 {
-            points.clear();
             return CollinearResult {
                 pt1: None,
                 pt2: None,
             };
+        } else if spike_left {
+            // Left end is a spike: remove points from start_2 to end_1 (exclusive of end_1)
+            // Then reconnect prev_2 -> end_1
+            // PORT FROM: C++ lines 874-885
+            let s2 = path.start_2.point_idx;
+            let e1 = path.end_1.point_idx;
+
+            // Collect points by walking from end_1 around back to start_2 (exclusive)
+            let mut new_points = Vec::new();
+            let mut idx = e1;
+            loop {
+                new_points.push(points[idx]);
+                idx = next_idx(idx, len);
+                if idx == s2 {
+                    break;
+                }
+            }
+
+            if new_points.len() < 3 {
+                if let Some(r) = manager.get_mut(ring_idx) {
+                    r.points_mut().clear();
+                }
+                return CollinearResult {
+                    pt1: None,
+                    pt2: None,
+                };
+            }
+
+            manager.set_ring_points(ring_idx, new_points);
+            return CollinearResult {
+                pt1: Some(PointRef::new(ring_idx, 0)),
+                pt2: None,
+            };
+        } else if spike_right {
+            // Right end is a spike: remove points from start_1 to end_2 (exclusive of end_2)
+            // Then reconnect prev_1 -> end_2
+            // PORT FROM: C++ lines 886-897
+            let s1 = path.start_1.point_idx;
+            let e2 = path.end_2.point_idx;
+
+            // Collect points by walking from end_2 around back to start_1 (exclusive)
+            let mut new_points = Vec::new();
+            let mut idx = e2;
+            loop {
+                new_points.push(points[idx]);
+                idx = next_idx(idx, len);
+                if idx == s1 {
+                    break;
+                }
+            }
+
+            if new_points.len() < 3 {
+                if let Some(r) = manager.get_mut(ring_idx) {
+                    r.points_mut().clear();
+                }
+                return CollinearResult {
+                    pt1: None,
+                    pt2: None,
+                };
+            }
+
+            manager.set_ring_points(ring_idx, new_points);
+            return CollinearResult {
+                pt1: Some(PointRef::new(ring_idx, 0)),
+                pt2: None,
+            };
+        } else {
+            // Cross-wire case: neither end is a spike.
+            // Removing the collinear stretch from both sides produces two separate loops.
+            // PORT FROM: C++ lines 898-931
+            //
+            // C++ linked-list cross-wire:
+            //   prev_1->next = end_2;  end_2->prev = prev_1;   => Loop 1: prev_1 -> end_2 -> ... -> prev_1
+            //   prev_2->next = end_1;  end_1->prev = prev_2;   => Loop 2: prev_2 -> end_1 -> ... -> prev_2
+            //
+            // In Vec terms:
+            //   Loop 1: walk from end_2 to prev_of(start_2) (the part of the ring NOT between start_2..end_2 and start_1..end_1)
+            //   Loop 2: walk from end_1 to prev_of(start_1)
+
+            let s1 = path.start_1.point_idx;
+            let e1 = path.end_1.point_idx;
+            let s2 = path.start_2.point_idx;
+            let e2 = path.end_2.point_idx;
+
+            // Check if both collinear ranges are empty (start==end on both sides)
+            if s1 == e1 && s2 == e2 {
+                // Both ranges are zero-length; nothing to remove
+                if let Some(r) = manager.get_mut(ring_idx) {
+                    r.points_mut().clear();
+                }
+                return CollinearResult {
+                    pt1: None,
+                    pt2: None,
+                };
+            } else if s1 == e1 {
+                // Range 1 is zero-length but range 2 is not: result is one ring
+                // Walk from end_2 around, skipping start_2..end_2
+                let mut new_points = Vec::new();
+                let mut idx = e2;
+                loop {
+                    new_points.push(points[idx]);
+                    idx = next_idx(idx, len);
+                    if idx == s2 {
+                        break;
+                    }
+                }
+                if new_points.len() < 3 {
+                    if let Some(r) = manager.get_mut(ring_idx) {
+                        r.points_mut().clear();
+                    }
+                    return CollinearResult {
+                        pt1: None,
+                        pt2: None,
+                    };
+                }
+                manager.set_ring_points(ring_idx, new_points);
+                return CollinearResult {
+                    pt1: Some(PointRef::new(ring_idx, 0)),
+                    pt2: None,
+                };
+            } else if s2 == e2 {
+                // Range 2 is zero-length but range 1 is not: result is one ring
+                let mut new_points = Vec::new();
+                let mut idx = e1;
+                loop {
+                    new_points.push(points[idx]);
+                    idx = next_idx(idx, len);
+                    if idx == s1 {
+                        break;
+                    }
+                }
+                if new_points.len() < 3 {
+                    if let Some(r) = manager.get_mut(ring_idx) {
+                        r.points_mut().clear();
+                    }
+                    return CollinearResult {
+                        pt1: None,
+                        pt2: None,
+                    };
+                }
+                manager.set_ring_points(ring_idx, new_points);
+                return CollinearResult {
+                    pt1: Some(PointRef::new(ring_idx, 0)),
+                    pt2: None,
+                };
+            } else {
+                // Both ranges are non-empty: cross-wire produces two loops.
+                //
+                // The C++ does:
+                //   prev_1->next = end_2; (i.e., the point before start_1 connects to end_2)
+                //   prev_2->next = end_1; (i.e., the point before start_2 connects to end_1)
+                //
+                // Loop 1 (returned as pt1): end_1 -> ... -> prev_of(start_1) [skipping s1..e1-1 and s2..e2-1]
+                //   = walk from end_1, going forward, until we reach start_2, then skip to end_2, continue until start_1
+                // Loop 2 (returned as pt2): end_2 -> ... -> prev_of(start_2)
+                //   = walk from end_2, going forward, until we reach start_1, then skip to end_1, continue until start_2
+                //
+                // Simpler way to think about it:
+                // The ring has two collinear stretches that we remove:
+                //   Stretch A: from start_1 to end_1 (exclusive of end_1)
+                //   Stretch B: from start_2 to end_2 (exclusive of end_2)
+                // After removing both stretches, the remaining points form two disconnected arcs:
+                //   Arc 1: from end_1 forward to start_2 (exclusive)
+                //   Arc 2: from end_2 forward to start_1 (exclusive)
+
+                let mut loop_1 = Vec::new();
+                let mut idx = e1;
+                let mut safety = 0;
+                loop {
+                    safety += 1;
+                    if safety > len + 1 {
+                        break;
+                    }
+                    loop_1.push(points[idx]);
+                    idx = next_idx(idx, len);
+                    if idx == s2 {
+                        break;
+                    }
+                }
+
+                let mut loop_2 = Vec::new();
+                idx = e2;
+                safety = 0;
+                loop {
+                    safety += 1;
+                    if safety > len + 1 {
+                        break;
+                    }
+                    loop_2.push(points[idx]);
+                    idx = next_idx(idx, len);
+                    if idx == s1 {
+                        break;
+                    }
+                }
+
+                if crate::debug::debug_enabled() {
+                    eprintln!(
+                        "[TOPOLOGY_COLLINEAR_SPLIT] ring={} s1={} e1={} s2={} e2={} loop1_len={} loop2_len={}",
+                        ring_idx, s1, e1, s2, e2, loop_1.len(), loop_2.len()
+                    );
+                }
+
+                // Check minimum sizes
+                let loop_1_valid = loop_1.len() >= 3;
+                let loop_2_valid = loop_2.len() >= 3;
+
+                if !loop_1_valid && !loop_2_valid {
+                    if let Some(r) = manager.get_mut(ring_idx) {
+                        r.points_mut().clear();
+                    }
+                    return CollinearResult {
+                        pt1: None,
+                        pt2: None,
+                    };
+                } else if !loop_2_valid {
+                    manager.set_ring_points(ring_idx, loop_1);
+                    return CollinearResult {
+                        pt1: Some(PointRef::new(ring_idx, 0)),
+                        pt2: None,
+                    };
+                } else if !loop_1_valid {
+                    manager.set_ring_points(ring_idx, loop_2);
+                    return CollinearResult {
+                        pt1: Some(PointRef::new(ring_idx, 0)),
+                        pt2: None,
+                    };
+                }
+
+                // Both loops are valid: create a new ring for loop_2
+                // PORT FROM: C++ process_collinear_edges_same_ring lines 1054-1059
+                let new_ring_idx = manager.create_new_ring();
+                manager.set_ring_points(ring_idx, loop_1);
+                manager.set_ring_points(new_ring_idx, loop_2);
+
+                return CollinearResult {
+                    pt1: Some(PointRef::new(ring_idx, 0)),
+                    pt2: Some(PointRef::new(new_ring_idx, 0)),
+                };
+            }
         }
-
-        *points = new_points;
-
-        return CollinearResult {
-            pt1: Some(PointRef::new(ring_idx, 0)),
-            pt2: None,
-        };
     }
 
     // Different rings case - merge rings
@@ -1899,6 +2166,12 @@ fn fix_collinear_path<T: CoordNum + Copy>(
 ///
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
 ///            process_collinear_edges_same_ring (lines 1034-1061)
+///
+/// Three possible outcomes:
+/// 1. Ring removed (both points None): ring was degenerate
+/// 2. Spike removed (one point): ring survives with spike stripped
+/// 3. Ring split (two points): collinear stretch removed, ring split into two
+///    (new ring is created inside fix_collinear_path)
 fn process_collinear_edges_same_ring<T: CoordNum + Copy>(
     manager: &mut crate::build_result::RingManager<T>,
     pt_a: PointRef,
@@ -1920,12 +2193,20 @@ fn process_collinear_edges_same_ring<T: CoordNum + Copy>(
             }
         }
         (Some(_pt1), None) => {
-            // Spike removed, ring survives as single piece
-            // The fix already modified the ring structure
+            // Spike removed, ring survives as single piece.
+            // fix_collinear_path already modified the ring points.
         }
         (Some(_pt1), Some(_pt2)) => {
-            // Ring split into two - would need to create new ring
-            // This is complex and handled by the full fix_collinear_path
+            // Ring was split into two separate rings.
+            // fix_collinear_path already created the new ring and set both rings' points.
+            // The C++ recalculates stats and updates point ownership here;
+            // in Rust, the RingManager handles this implicitly.
+            if crate::debug::debug_enabled() {
+                eprintln!(
+                    "[TOPOLOGY_COLLINEAR] Ring {} split into two rings (new ring via fix_collinear_path)",
+                    ring_idx
+                );
+            }
         }
     }
 }
@@ -2133,13 +2414,18 @@ fn process_collinear_edges<T: CoordNum + Copy>(
     // Step 1: Check for actual collinear edge (spike pattern)
     let has_collinear = has_collinear_edge(manager, pt_a, pt_b);
     if crate::debug::debug_enabled() {
+        let ca = manager
+            .get(pt_a.ring_idx)
+            .and_then(|r| r.points().get(pt_a.point_idx).copied());
+        let cb = manager
+            .get(pt_b.ring_idx)
+            .and_then(|r| r.points().get(pt_b.point_idx).copied());
         eprintln!(
-            "[TOPOLOGY_COLLINEAR] pt_a.ring={} pt_b.ring={} has_collinear={}",
-            pt_a.ring_idx, pt_b.ring_idx, has_collinear
+            "[TOPOLOGY_COLLINEAR] pt_a.ring={} pt_a.idx={} pt_b.ring={} pt_b.idx={} has_collinear={} coord_a={:?} coord_b={:?}",
+            pt_a.ring_idx, pt_a.point_idx, pt_b.ring_idx, pt_b.point_idx, has_collinear, ca, cb
         );
     }
     if !has_collinear {
-        // No collinear edge - nothing to do
         return false;
     }
 
@@ -2264,53 +2550,292 @@ fn build_all_points<T: CoordNum + Copy>(
 pub fn correct_collinear_edges<T: CoordNum + Copy>(
     manager: &mut crate::build_result::RingManager<T>,
 ) {
-    // Build sorted list of all points
-    let all_points = build_all_points(manager);
+    // DIVERGENCE FROM WAGYU: Restart-on-change for Vec-based ring storage.
+    //
+    // C++ uses linked-list pointers in all_points that remain valid after ring surgery.
+    // In Rust, when fix_collinear_path rewrites a ring's point Vec, all stored indices
+    // for that ring become stale. We must rebuild all_points and restart whenever a
+    // modification occurs to avoid using stale indices.
+    let max_restarts = 100;
+    for _restart in 0..max_restarts {
+        // Build sorted list of all points (fresh on every restart)
+        let all_points = build_all_points(manager);
 
-    if crate::debug::debug_enabled() {
-        eprintln!("[TOPOLOGY_COLLINEAR] all_points count={}", all_points.len());
-    }
-
-    if all_points.len() < 2 {
-        return;
-    }
-
-    // Group by coordinate and process each group
-    let mut group_start = 0;
-
-    while group_start < all_points.len() {
-        let group_coord = all_points[group_start].1;
-        let mut group_end = group_start + 1;
-
-        // Find end of group (consecutive points with same coordinate)
-        while group_end < all_points.len() {
-            if !coords_equal(&all_points[group_end].1, &group_coord) {
-                break;
-            }
-            group_end += 1;
+        if crate::debug::debug_enabled() {
+            eprintln!("[TOPOLOGY_COLLINEAR] all_points count={}", all_points.len());
         }
 
-        // Process this group if it has 2+ points
-        if group_end - group_start >= 2 {
-            let group: Vec<PointRef> = all_points[group_start..group_end]
+        if all_points.len() < 2 {
+            return;
+        }
+
+        let mut changed = false;
+
+        // Group by coordinate and process each group
+        let mut group_start = 0;
+
+        while group_start < all_points.len() {
+            let group_coord = all_points[group_start].1;
+            let mut group_end = group_start + 1;
+
+            // Find end of group (consecutive points with same coordinate)
+            while group_end < all_points.len() {
+                if !coords_equal(&all_points[group_end].1, &group_coord) {
+                    break;
+                }
+                group_end += 1;
+            }
+
+            // Process this group if it has 2+ points
+            if group_end - group_start >= 2 {
+                let group: Vec<PointRef> = all_points[group_start..group_end]
+                    .iter()
+                    .map(|(pr, _)| *pr)
+                    .collect();
+
+                if crate::debug::debug_enabled() {
+                    eprintln!(
+                        "[TOPOLOGY_COLLINEAR] coord=({},{}) size={} rings={:?}",
+                        group_coord.x.to_f64().unwrap_or(0.0),
+                        group_coord.y.to_f64().unwrap_or(0.0),
+                        group.len(),
+                        group.iter().map(|pr| pr.ring_idx).collect::<Vec<_>>()
+                    );
+                }
+
+                let rings_before: Vec<usize> = (0..manager.len())
+                    .filter_map(|i| manager.get(i).map(|r| r.points().len()))
+                    .collect();
+
+                correct_collinear_repeats(manager, &group);
+
+                let rings_after: Vec<usize> = (0..manager.len())
+                    .filter_map(|i| manager.get(i).map(|r| r.points().len()))
+                    .collect();
+
+                if rings_before != rings_after {
+                    // Ring points changed; indices in all_points are now stale.
+                    // Restart with a fresh all_points.
+                    changed = true;
+                    break;
+                }
+            }
+
+            group_start = group_end;
+        }
+
+        if !changed {
+            return;
+        }
+    }
+}
+
+/// Check if a point lies strictly on a line segment (between the endpoints, not at them).
+///
+/// Returns true if `pt` is collinear with `seg_start` and `seg_end` and lies
+/// strictly between them (not at either endpoint).
+fn point_on_segment<T: CoordNum>(pt: &Coord<T>, seg_start: &Coord<T>, seg_end: &Coord<T>) -> bool {
+    // Must be collinear
+    if !points_are_collinear(seg_start, pt, seg_end) {
+        return false;
+    }
+    // Must be strictly between (not at endpoints)
+    if (pt.x == seg_start.x && pt.y == seg_start.y) || (pt.x == seg_end.x && pt.y == seg_end.y) {
+        return false;
+    }
+    // Must be within the bounding box of the segment
+    let min_x = if seg_start.x < seg_end.x {
+        seg_start.x
+    } else {
+        seg_end.x
+    };
+    let max_x = if seg_start.x > seg_end.x {
+        seg_start.x
+    } else {
+        seg_end.x
+    };
+    let min_y = if seg_start.y < seg_end.y {
+        seg_start.y
+    } else {
+        seg_end.y
+    };
+    let max_y = if seg_start.y > seg_end.y {
+        seg_start.y
+    } else {
+        seg_end.y
+    };
+    pt.x >= min_x && pt.x <= max_x && pt.y >= min_y && pt.y <= max_y
+}
+
+/// Insert vertices from other rings that lie on a ring's edges, and also
+/// compute edge-edge intersections between different rings.
+///
+/// DIVERGENCE FROM WAGYU: The C++ Vatti sweep produces separate rings for each
+/// region, so this fixup is unnecessary there. In Rust, the Vatti sweep sometimes
+/// merges rings that should be separate. After topology correction splits them,
+/// vertices from one ring may lie on another ring's edges but NOT at its vertices.
+/// This prevents `correct_chained_rings` from detecting shared points.
+///
+/// Additionally, this function computes edge-edge intersection points between
+/// different rings (where edges cross but the intersection point is not yet a
+/// vertex of either ring). These intersection points are critical for the
+/// difference operation where the Rust Vatti sweep may not produce all needed
+/// intersection vertices.
+///
+/// This function finds such cases and inserts the missing vertices, enabling
+/// subsequent chained intersection processing to properly split rings at
+/// shared touch points.
+fn insert_hole_vertices_on_parent_edges<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+) {
+    // Collect valid ring indices and their points (snapshot)
+    let mut ring_data: Vec<(usize, Vec<Coord<T>>)> = Vec::new();
+    for ring_idx in 0..manager.len() {
+        if let Some(ring) = manager.get(ring_idx) {
+            if ring.points().len() >= 3 {
+                ring_data.push((ring_idx, ring.points().to_vec()));
+            }
+        }
+    }
+
+    // Collect all unique vertices from all rings
+    let mut all_vertices: Vec<Coord<T>> = Vec::new();
+    for (_, pts) in &ring_data {
+        for pt in pts {
+            if !all_vertices.iter().any(|v| v.x == pt.x && v.y == pt.y) {
+                all_vertices.push(*pt);
+            }
+        }
+    }
+
+    // Also include input polygon vertices when a hole ring has vertices that
+    // lie strictly on its parent ring's edges. This condition detects the
+    // specific case where the Rust Vatti sweep missed intersection points
+    // between input polygon edges (e.g., clip-subject intersections).
+    //
+    // DIVERGENCE FROM WAGYU: In C++, the Vatti sweep produces all needed
+    // intersection vertices. In Rust, some are missed, requiring this fixup.
+    let input_edges = manager.input_edges().to_vec();
+    if !input_edges.is_empty() {
+        let mut needs_input_vertices = false;
+        'outer: for &(ring_idx, ref ring_pts) in &ring_data {
+            if let Some(ring) = manager.get(ring_idx) {
+                if let Some(parent_idx) = ring.parent() {
+                    if let Some(parent_data) = ring_data.iter().find(|&&(idx, _)| idx == parent_idx)
+                    {
+                        let parent_pts = &parent_data.1;
+                        for hole_pt in ring_pts {
+                            for pe in 0..parent_pts.len() {
+                                let pe_next = (pe + 1) % parent_pts.len();
+                                if point_on_segment(hole_pt, &parent_pts[pe], &parent_pts[pe_next])
+                                {
+                                    needs_input_vertices = true;
+                                    if crate::debug::debug_enabled() {
+                                        eprintln!(
+                                            "[TOPOLOGY_VTXINS] Hole {} vertex on parent {} edge - enabling input vertex insertion",
+                                            ring_idx, parent_idx
+                                        );
+                                    }
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if needs_input_vertices {
+            for (a, b) in &input_edges {
+                if !all_vertices.iter().any(|v| v.x == a.x && v.y == a.y) {
+                    all_vertices.push(*a);
+                }
+                if !all_vertices.iter().any(|v| v.x == b.x && v.y == b.y) {
+                    all_vertices.push(*b);
+                }
+            }
+        }
+    }
+
+    // For each ring, check if any vertex from the global set lies on its edges.
+    // Collect insertions per ring.
+    let mut per_ring_insertions: std::collections::HashMap<usize, Vec<(usize, Coord<T>)>> =
+        std::collections::HashMap::new();
+
+    for &(ring_idx, ref ring_points) in &ring_data {
+        for vertex in &all_vertices {
+            // Skip if already a vertex of this ring
+            if ring_points
                 .iter()
-                .map(|(pr, _)| *pr)
-                .collect();
-
-            if crate::debug::debug_enabled() {
-                eprintln!(
-                    "[TOPOLOGY_COLLINEAR] coord=({},{}) size={} rings={:?}",
-                    group_coord.x.to_f64().unwrap_or(0.0),
-                    group_coord.y.to_f64().unwrap_or(0.0),
-                    group.len(),
-                    group.iter().map(|pr| pr.ring_idx).collect::<Vec<_>>()
-                );
+                .any(|p| p.x == vertex.x && p.y == vertex.y)
+            {
+                continue;
             }
 
-            correct_collinear_repeats(manager, &group);
+            // Check each edge
+            for i in 0..ring_points.len() {
+                let j = (i + 1) % ring_points.len();
+                if point_on_segment(vertex, &ring_points[i], &ring_points[j]) {
+                    per_ring_insertions
+                        .entry(ring_idx)
+                        .or_default()
+                        .push((i, *vertex));
+                    break;
+                }
+            }
+        }
+    }
+
+    // Apply insertions to each ring
+    for (ring_idx, mut insertions) in per_ring_insertions {
+        if insertions.is_empty() {
+            continue;
         }
 
-        group_start = group_end;
+        let ring_points: Vec<Coord<T>> = match manager.get(ring_idx) {
+            Some(r) => r.points().to_vec(),
+            None => continue,
+        };
+
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[TOPOLOGY] Inserting {} vertices onto ring {} edges",
+                insertions.len(),
+                ring_idx
+            );
+        }
+
+        // Sort insertions by edge index descending, then by distance from edge start
+        // descending (so inserting from end doesn't shift earlier indices).
+        insertions.sort_by(|a, b| {
+            if a.0 != b.0 {
+                b.0.cmp(&a.0)
+            } else {
+                let dist_a = {
+                    let dx =
+                        a.1.x.to_f64().unwrap_or(0.0) - ring_points[a.0].x.to_f64().unwrap_or(0.0);
+                    let dy =
+                        a.1.y.to_f64().unwrap_or(0.0) - ring_points[a.0].y.to_f64().unwrap_or(0.0);
+                    dx * dx + dy * dy
+                };
+                let dist_b = {
+                    let dx =
+                        b.1.x.to_f64().unwrap_or(0.0) - ring_points[b.0].x.to_f64().unwrap_or(0.0);
+                    let dy =
+                        b.1.y.to_f64().unwrap_or(0.0) - ring_points[b.0].y.to_f64().unwrap_or(0.0);
+                    dx * dx + dy * dy
+                };
+                dist_b
+                    .partial_cmp(&dist_a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
+
+        let mut new_points = ring_points;
+        for (after_idx, coord) in &insertions {
+            new_points.insert(after_idx + 1, *coord);
+        }
+
+        manager.set_ring_points(ring_idx, new_points);
     }
 }
 
@@ -2391,6 +2916,18 @@ pub fn correct_topology<T: CoordNum + Copy>(manager: &mut crate::build_result::R
         eprintln!("[TOPOLOGY] Step 4: correct_tree");
     }
     correct_tree(manager);
+
+    // Step 4b: Insert hole vertices that lie on parent edges.
+    //
+    // DIVERGENCE FROM WAGYU: The C++ Vatti sweep produces separate rings
+    // for each region, so this step is unnecessary. The Rust Vatti sweep
+    // sometimes merges rings that should be separate, producing a single
+    // complex ring that is split during topology correction. After splitting,
+    // a hole ring's vertices may lie on its parent exterior ring's edges
+    // but not at the parent's vertices. This step inserts those vertices
+    // so that correct_chained_rings can detect shared points and split
+    // the exterior ring into proper sub-regions.
+    insert_hole_vertices_on_parent_edges(manager);
 
     // Step 5: Iteratively correct chained rings and self-intersections until stable
     // PORT FROM: C++ correct_topology lines 1339-1343
@@ -2921,10 +3458,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
         if missing {
             let pair =
                 PointPtrPair::new(op_origin_1.0, op_origin_1.1, op_origin_2.0, op_origin_2.1);
-            connection_map
-                .entry(ring_origin)
-                .or_default()
-                .push(pair);
+            connection_map.entry(ring_origin).or_default().push(pair);
         }
         return;
     }
@@ -3421,6 +3955,18 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
             new_ring_idx,
             fragment_2.len()
         );
+        eprintln!("[TOPOLOGY]   ring {} points:", ring_a_idx);
+        if let Some(r) = manager.get(ring_a_idx) {
+            for (i, pt) in r.points().iter().enumerate() {
+                eprintln!("[TOPOLOGY]     {}: ({:?},{:?})", i, pt.x, pt.y);
+            }
+        }
+        eprintln!("[TOPOLOGY]   ring {} points:", new_ring_idx);
+        if let Some(r) = manager.get(new_ring_idx) {
+            for (i, pt) in r.points().iter().enumerate() {
+                eprintln!("[TOPOLOGY]     {}: ({:?},{:?})", i, pt.x, pt.y);
+            }
+        }
     }
 }
 
@@ -5654,12 +6200,15 @@ mod collinear_edge_tests {
 
         correct_collinear_edges(&mut manager);
 
-        // After correction: spike removed, ring should have 4 points
+        // After correction: spike removed, ring should have 5 points.
+        // The spike base (5,0) remains as a collinear point on the bottom edge --
+        // this matches C++ behavior where the spike removal reconnects prev_1->next = end_2,
+        // keeping the non-spike copy of the shared coordinate.
         let ring_after = manager.get(idx).expect("Ring should survive spike removal");
         assert_eq!(
             ring_after.len(),
-            4,
-            "Square spike ring should reduce to 4-point square after spike removal"
+            5,
+            "Square spike ring should reduce to 5-point square (spike base stays as collinear point)"
         );
 
         // The spike tip (5,-5) must not appear in the result
@@ -5693,14 +6242,18 @@ mod collinear_edge_tests {
 
         correct_collinear_edges(&mut manager);
 
-        // After correction: both spikes removed, ring should have 4 points
+        // After correction: both spikes removed, ring should have 6 points.
+        // The 4 square corners remain, plus 2 spike base points that are now
+        // collinear with their neighboring corners. This matches C++ behavior
+        // where spike removal reconnects prev->next = end, keeping the non-spike
+        // copy of the shared coordinate.
         let ring_after = manager
             .get(idx)
             .expect("Ring should survive double spike removal");
         assert_eq!(
             ring_after.len(),
-            4,
-            "Ring with two spikes should reduce to 4-point square"
+            6,
+            "Ring with two spikes should reduce to 6-point square (spike bases stay as collinear points)"
         );
 
         // Neither spike tip should remain

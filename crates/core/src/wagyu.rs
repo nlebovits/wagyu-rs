@@ -257,6 +257,38 @@ impl<T: Coord> Wagyu<T> {
         // Check for interruptions
         interrupt_check()?;
 
+        // Store input edges from minima_list for topology correction.
+        // DIVERGENCE FROM WAGYU: The Rust Vatti sweep may miss some edge
+        // intersection points that the C++ version computes. By storing the
+        // original input edges, topology correction can compute missing
+        // intersection points.
+        for lm in self.minima_list.iter() {
+            for edge in &lm.left_bound.edges {
+                manager.add_input_edge(
+                    geo_types::Coord {
+                        x: edge.bot.x,
+                        y: edge.bot.y,
+                    },
+                    geo_types::Coord {
+                        x: edge.top.x,
+                        y: edge.top.y,
+                    },
+                );
+            }
+            for edge in &lm.right_bound.edges {
+                manager.add_input_edge(
+                    geo_types::Coord {
+                        x: edge.bot.x,
+                        y: edge.bot.y,
+                    },
+                    geo_types::Coord {
+                        x: edge.top.x,
+                        y: edge.top.y,
+                    },
+                );
+            }
+        }
+
         // Execute the main Vatti sweep algorithm
         execute_vatti(
             &mut self.minima_list,

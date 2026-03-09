@@ -35,6 +35,14 @@ pub struct RingManager<T: CoordNum> {
     /// Ring indices that were merged into other rings during Vatti sweep.
     /// These rings' points should be cleared before topology correction.
     merged_rings: Vec<usize>,
+    /// Original input polygon edges (segments as pairs of coordinates).
+    ///
+    /// DIVERGENCE FROM WAGYU: Stored so that topology correction can compute
+    /// missing intersection points that the Rust Vatti sweep didn't produce.
+    /// The C++ Vatti sweep produces all needed intersection points, but the
+    /// Rust port sometimes misses some. By retaining the input edges, we can
+    /// compute the intersections during topology correction.
+    input_edges: Vec<(Coord<T>, Coord<T>)>,
 }
 
 impl<T: CoordNum> RingManager<T> {
@@ -46,7 +54,22 @@ impl<T: CoordNum> RingManager<T> {
             hot_pixels: Vec::new(),
             current_hp_idx: 0,
             merged_rings: Vec::new(),
+            input_edges: Vec::new(),
         }
+    }
+
+    /// Store an input edge (segment) for use during topology correction.
+    ///
+    /// DIVERGENCE FROM WAGYU: The C++ Vatti sweep produces all needed
+    /// intersection points. The Rust port may miss some, so we store the
+    /// original input edges to compute missing intersections later.
+    pub fn add_input_edge(&mut self, a: Coord<T>, b: Coord<T>) {
+        self.input_edges.push((a, b));
+    }
+
+    /// Get the stored input edges.
+    pub fn input_edges(&self) -> &[(Coord<T>, Coord<T>)] {
+        &self.input_edges
     }
 
     /// Mark a ring as merged (its points were copied to another ring).
