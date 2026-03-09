@@ -145,3 +145,73 @@ jobs:
 
       - name: Run security audit
         run: cargo audit
+
+  # License and dependency checks
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny
+
+      - name: Check licenses and dependencies
+        run: cargo deny check
+
+  # Spell check
+  codespell:
+    name: Spell Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install codespell
+        run: pip install codespell
+
+      - name: Run spell check
+        run: codespell --skip "*.lock,target/*,.git/*,*.json" --ignore-words-list "crate,nd,ot,abl" crates/ docs/ README.md CLAUDE.md
+
+  # Documentation validation
+  docs-validation:
+    name: Docs Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate CLAUDE.md
+        run: python scripts/validate_claude_md.py
+
+      - name: Validate README.md
+        run: python scripts/validate_readme.py
+
+  # Architecture enforcement
+  architecture:
+    name: Architecture Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate architecture rules
+        run: python scripts/validate_architecture.py

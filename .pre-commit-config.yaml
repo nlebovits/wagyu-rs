@@ -1,0 +1,96 @@
+# Pre-commit hooks for wagyu-rs
+# Install: pip install pre-commit && pre-commit install
+#
+# All hooks BLOCK on failure. No warnings, no skips.
+repos:
+  # === STANDARD HOOKS ===
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: ['--unsafe']  # Allow Python tags in mkdocs.yml
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+        exclude: '^(crates/core/tests/fixtures/|tools/oracle/test_inputs/).*\.json$'
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: mixed-line-ending
+
+  # === RUST HOOKS ===
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      # === SAFETY HOOKS ===
+      - id: forbid-worktrees
+        name: forbid worktree files
+        entry: "bash -c 'echo ERROR - Worktree files should not be committed. && exit 1'"
+        language: system
+        files: ^\.worktrees/
+        pass_filenames: false
+
+      # === AUTO-UPDATE HOOKS ===
+      - id: update-claude-md
+        name: auto-update CLAUDE.md sections
+        entry: python scripts/generate_claude_md.py --update
+        language: system
+        files: ^(CLAUDE\.md|crates/.*\.rs)$
+        pass_filenames: false
+
+      - id: update-freshness
+        name: auto-update freshness markers
+        entry: python scripts/update_freshness.py
+        language: system
+        files: ^crates/.*\.rs$
+        pass_filenames: true
+
+      # === VALIDATION HOOKS ===
+      - id: validate-claude-md
+        name: validate CLAUDE.md references
+        entry: python scripts/validate_claude_md.py
+        language: system
+        files: ^(CLAUDE\.md|context/.*\.md)$
+        pass_filenames: false
+
+      - id: validate-readme
+        name: validate README.md
+        entry: python scripts/validate_readme.py
+        language: system
+        files: ^(README\.md|Cargo\.toml)$
+        pass_filenames: false
+
+      - id: architecture-check
+        name: architecture rules
+        entry: python scripts/validate_architecture.py
+        language: system
+        files: ^crates/.*\.rs$
+        pass_filenames: false
+
+  # === SPELL CHECK ===
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell
+        args: ['--skip', '*.lock,target/*,.git/*,*.json', '--ignore-words-list', 'crate,nd,ot,abl']
+        exclude: ^(target/|\.git/)
+
+  # === COMMITIZEN ===
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.1.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
