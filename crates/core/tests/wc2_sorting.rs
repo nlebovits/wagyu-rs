@@ -3,9 +3,7 @@
 //! These tests verify that intersection list sorting uses winding_count2_sum
 //! as the tie-breaker for same-Y intersections, matching C++ behavior.
 
-use wagyu_rs::{
-    config::FillType, config::PolygonType, point::Point, wagyu::Wagyu, Operation,
-};
+use wagyu_rs::{config::FillType, config::PolygonType, point::Point, wagyu::Wagyu, Operation};
 
 /// Helper to create a polygon (Vec of rings) from a single ring
 fn polygon_from_ring(ring: Vec<Point<i64>>) -> Vec<Vec<Point<i64>>> {
@@ -154,7 +152,11 @@ fn sorting_fix_regression_simple_intersection() {
 
     assert!(result.is_ok());
     let mp = result.unwrap();
-    assert_eq!(mp.0.len(), 1, "Should produce exactly one intersection polygon");
+    assert_eq!(
+        mp.0.len(),
+        1,
+        "Should produce exactly one intersection polygon"
+    );
 
     // The intersection should be a 5x5 square
     let poly = &mp.0[0];

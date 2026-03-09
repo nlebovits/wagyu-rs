@@ -993,7 +993,10 @@ pub fn append_ring<T: CoordNum + Copy>(
 
     // DEBUG: Log all bounds' ring assignments after merge
     if crate::debug::debug_enabled() {
-        eprintln!("[APPEND_RING_END] keep={} remove={}", keep_ring_idx, remove_ring_idx);
+        eprintln!(
+            "[APPEND_RING_END] keep={} remove={}",
+            keep_ring_idx, remove_ring_idx
+        );
         for &ab_idx in active_bounds {
             eprintln!(
                 "  [BOUND_STATE] idx={} ring={:?} side={:?}",

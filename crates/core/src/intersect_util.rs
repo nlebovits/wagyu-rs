@@ -510,7 +510,8 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
                 // C++: prepend remove to keep (x y z a b c)
                 let mut new_points = remove_points;
                 // Skip duplicate at join point (last of remove == first of keep)
-                if let (Some(rem_last), Some(keep_first)) = (new_points.last(), keep_points.first()) {
+                if let (Some(rem_last), Some(keep_first)) = (new_points.last(), keep_points.first())
+                {
                     if rem_last == keep_first {
                         new_points.pop();
                     }
@@ -746,10 +747,10 @@ pub fn intersect_bounds<T: CoordNum>(
             // - Legitimate: merge at (1,1), new ring at (1,1) - ALLOW (same point)
             let b1_cleared_elsewhere = b1
                 .ring_cleared_at
-                .map_or(false, |(x, y)| y == pt.y && x != pt.x);
+                .is_some_and(|(x, y)| y == pt.y && x != pt.x);
             let b2_cleared_elsewhere = b2
                 .ring_cleared_at
-                .map_or(false, |(x, y)| y == pt.y && x != pt.x);
+                .is_some_and(|(x, y)| y == pt.y && x != pt.x);
 
             if b1_cleared_elsewhere || b2_cleared_elsewhere {
                 // Ring was cleared at a different X on this scanline - spurious
@@ -861,7 +862,8 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
                     if crate::debug::debug_enabled() {
                         eprintln!(
                             "[MERGE_SEARCH] Looking for bounds with ring={}, AEL has {} bounds",
-                            remove_ring_idx, ael.as_slice().len()
+                            remove_ring_idx,
+                            ael.as_slice().len()
                         );
                         for &ab_idx in ael.as_slice() {
                             eprintln!(

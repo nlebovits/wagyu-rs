@@ -204,8 +204,6 @@ pub fn log_vatti_end(ring_count: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_debug_disabled_by_default() {
         // Note: This test assumes WAGYU_DEBUG is not set in the test environment

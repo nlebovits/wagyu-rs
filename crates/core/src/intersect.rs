@@ -234,17 +234,17 @@ mod tests {
     fn intersect_node_equal_y_sorts_by_winding_count2_sum_descending() {
         // PORT FROM: C++ intersect_list_sorter uses winding_count2 sum as tie-breaker
         // Higher winding_count2_sum comes first (descending order)
-        let node1 = IntersectNode::new(Point::new(10.0_f64, 20.0_f64), 0, 1, 5);  // sum=5
-        let node2 = IntersectNode::new(Point::new(5.0_f64, 20.0_f64), 2, 3, 10);  // sum=10
-        let node3 = IntersectNode::new(Point::new(15.0_f64, 20.0_f64), 4, 5, 2);  // sum=2
+        let node1 = IntersectNode::new(Point::new(10.0_f64, 20.0_f64), 0, 1, 5); // sum=5
+        let node2 = IntersectNode::new(Point::new(5.0_f64, 20.0_f64), 2, 3, 10); // sum=10
+        let node3 = IntersectNode::new(Point::new(15.0_f64, 20.0_f64), 4, 5, 2); // sum=2
 
         let mut nodes = [node1.clone(), node2.clone(), node3.clone()];
         nodes.sort();
 
         // All have same Y=20, so sort by winding_count2_sum descending: 10, 5, 2
         assert_eq!(nodes[0].winding_count2_sum, 10); // node2
-        assert_eq!(nodes[1].winding_count2_sum, 5);  // node1
-        assert_eq!(nodes[2].winding_count2_sum, 2);  // node3
+        assert_eq!(nodes[1].winding_count2_sum, 5); // node1
+        assert_eq!(nodes[2].winding_count2_sum, 2); // node3
     }
 
     #[test]
@@ -257,16 +257,16 @@ mod tests {
         //
         // The key insight: node at x=5 has HIGHEST wc2_sum, so it comes FIRST,
         // even though x=5 < x=10 < x=15.
-        let node_x5 = IntersectNode::new(Point::new(5.0_f64, 20.0_f64), 0, 1, 10);   // x=5, wc2=10
-        let node_x10 = IntersectNode::new(Point::new(10.0_f64, 20.0_f64), 2, 3, 5);  // x=10, wc2=5
-        let node_x15 = IntersectNode::new(Point::new(15.0_f64, 20.0_f64), 4, 5, 2);  // x=15, wc2=2
+        let node_x5 = IntersectNode::new(Point::new(5.0_f64, 20.0_f64), 0, 1, 10); // x=5, wc2=10
+        let node_x10 = IntersectNode::new(Point::new(10.0_f64, 20.0_f64), 2, 3, 5); // x=10, wc2=5
+        let node_x15 = IntersectNode::new(Point::new(15.0_f64, 20.0_f64), 4, 5, 2); // x=15, wc2=2
 
         let mut nodes = [node_x10.clone(), node_x5.clone(), node_x15.clone()];
         nodes.sort();
 
         // Sorted by wc2_sum descending: wc2=10 (x=5), wc2=5 (x=10), wc2=2 (x=15)
         // This is the OPPOSITE of X-ascending order!
-        assert_eq!(nodes[0].point.x, 5.0);  // wc2=10 comes first
+        assert_eq!(nodes[0].point.x, 5.0); // wc2=10 comes first
         assert_eq!(nodes[1].point.x, 10.0); // wc2=5 second
         assert_eq!(nodes[2].point.x, 15.0); // wc2=2 last
 
@@ -279,9 +279,9 @@ mod tests {
     fn intersect_node_equal_wc2_sum_is_stable() {
         // When winding_count2_sum values are equal, the order is stable (no X-based tie-breaker).
         // This matches C++ std::stable_sort behavior.
-        let node_a = IntersectNode::new(Point::new(15.0_f64, 20.0_f64), 0, 1, 5);  // x=15, wc2=5
-        let node_b = IntersectNode::new(Point::new(5.0_f64, 20.0_f64), 2, 3, 5);   // x=5, wc2=5
-        let node_c = IntersectNode::new(Point::new(10.0_f64, 20.0_f64), 4, 5, 5);  // x=10, wc2=5
+        let node_a = IntersectNode::new(Point::new(15.0_f64, 20.0_f64), 0, 1, 5); // x=15, wc2=5
+        let node_b = IntersectNode::new(Point::new(5.0_f64, 20.0_f64), 2, 3, 5); // x=5, wc2=5
+        let node_c = IntersectNode::new(Point::new(10.0_f64, 20.0_f64), 4, 5, 5); // x=10, wc2=5
 
         // Input order: a, b, c
         let mut nodes = [node_a.clone(), node_b.clone(), node_c.clone()];
@@ -299,10 +299,10 @@ mod tests {
     #[test]
     fn intersect_node_mixed_y_and_winding_count_sorting() {
         // Mix of different Y values and same Y values
-        let node_a = IntersectNode::new(Point::new(10.0_f64, 20.0_f64), 0, 1, 5);  // y=20, wc2=5
-        let node_b = IntersectNode::new(Point::new(5.0_f64, 20.0_f64), 2, 3, 10);  // y=20, wc2=10
-        let node_c = IntersectNode::new(Point::new(0.0_f64, 30.0_f64), 4, 5, 0);   // y=30, wc2=0
-        let node_d = IntersectNode::new(Point::new(20.0_f64, 10.0_f64), 6, 7, 0);  // y=10, wc2=0
+        let node_a = IntersectNode::new(Point::new(10.0_f64, 20.0_f64), 0, 1, 5); // y=20, wc2=5
+        let node_b = IntersectNode::new(Point::new(5.0_f64, 20.0_f64), 2, 3, 10); // y=20, wc2=10
+        let node_c = IntersectNode::new(Point::new(0.0_f64, 30.0_f64), 4, 5, 0); // y=30, wc2=0
+        let node_d = IntersectNode::new(Point::new(20.0_f64, 10.0_f64), 6, 7, 0); // y=10, wc2=0
 
         let mut nodes = [
             node_a.clone(),
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(nodes[1].point.y, 20.0);
         assert_eq!(nodes[1].winding_count2_sum, 10); // node_b (higher wc2)
         assert_eq!(nodes[2].point.y, 20.0);
-        assert_eq!(nodes[2].winding_count2_sum, 5);  // node_a (lower wc2)
+        assert_eq!(nodes[2].winding_count2_sum, 5); // node_a (lower wc2)
         assert_eq!(nodes[3].point.y, 10.0); // node_d
     }
 
