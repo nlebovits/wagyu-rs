@@ -1011,4 +1011,3 @@ golden_test!(
     "self-intersecting-ring-polygon",
     Operation::Xor
 );
-

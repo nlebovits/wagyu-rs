@@ -114,10 +114,7 @@ impl<T: CoordNum> RingManager<T> {
     /// This maintains the bidirectional relationship between parent and child.
     pub fn set_parent(&mut self, child_index: usize, parent_index: usize) {
         if crate::debug::debug_enabled() {
-            eprintln!(
-                "[SET_PARENT] child={} parent={}",
-                child_index, parent_index
-            );
+            eprintln!("[SET_PARENT] child={} parent={}", child_index, parent_index);
         }
         // Set the child's parent
         if let Some(child) = self.rings.get_mut(child_index) {

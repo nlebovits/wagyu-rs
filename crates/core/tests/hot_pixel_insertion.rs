@@ -148,7 +148,11 @@ fn intersection_touching_at_corner_handles_hot_pixel() {
     wagyu.add_polygon(&clip, PolygonType::Clip);
 
     let result = wagyu
-        .execute(Operation::Intersection, FillType::EvenOdd, FillType::EvenOdd)
+        .execute(
+            Operation::Intersection,
+            FillType::EvenOdd,
+            FillType::EvenOdd,
+        )
         .expect("Intersection execution failed");
 
     // Intersection should be the overlapping region: (5,0) to (10,5)
@@ -156,8 +160,14 @@ fn intersection_touching_at_corner_handles_hot_pixel() {
 
     // Corner points should be present
     assert!(has_coord(&result, 5, 0), "Corner (5, 0) should be present");
-    assert!(has_coord(&result, 10, 0), "Corner (10, 0) should be present");
-    assert!(has_coord(&result, 10, 5), "Corner (10, 5) should be present");
+    assert!(
+        has_coord(&result, 10, 0),
+        "Corner (10, 0) should be present"
+    );
+    assert!(
+        has_coord(&result, 10, 5),
+        "Corner (10, 5) should be present"
+    );
     assert!(has_coord(&result, 5, 5), "Corner (5, 5) should be present");
 }
 
@@ -179,8 +189,5 @@ fn xor_shared_edge_preserves_hot_pixel() {
 
     // XOR of adjacent non-overlapping rectangles should merge into one
     // The shared edge points should be handled correctly
-    assert!(
-        result.0.len() >= 1,
-        "XOR should produce at least 1 polygon"
-    );
+    assert!(result.0.len() >= 1, "XOR should produce at least 1 polygon");
 }

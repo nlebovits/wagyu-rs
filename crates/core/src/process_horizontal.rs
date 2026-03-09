@@ -19,13 +19,13 @@ use num_traits::ToPrimitive;
 use crate::active_edge_list::ActiveEdgeList;
 use crate::bound::Bound;
 use crate::build_result::RingManager;
+use crate::config::EdgeSide;
 use crate::config::{FillType, HorizontalDirection};
 use crate::intersect_util::{get_current_x, intersect_bounds, IntersectResult};
 use crate::local_minimum::LocalMinimumList;
 use crate::local_minimum_util::insert_horizontal_local_minima_into_abl;
 use crate::point::Point;
 use crate::process_maxima::{do_maxima, get_maxima_pair, is_intermediate, is_maxima};
-use crate::config::EdgeSide;
 use crate::ring_util;
 use crate::scanbeam::Scanbeam;
 use crate::Operation;
@@ -244,7 +244,8 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
                 if crate::debug::debug_enabled() {
                     eprintln!(
                         "[HORIZ_MERGE_SEARCH] Looking for bounds with ring={}, AEL has {} bounds",
-                        remove_ring_idx, ael.as_slice().len()
+                        remove_ring_idx,
+                        ael.as_slice().len()
                     );
                     for &ab_idx in ael.as_slice() {
                         eprintln!(
@@ -450,7 +451,8 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
                 if crate::debug::debug_enabled() {
                     eprintln!(
                         "[HORIZ_MERGE_SEARCH_L] Looking for bounds with ring={}, AEL has {} bounds",
-                        remove_ring_idx, ael.as_slice().len()
+                        remove_ring_idx,
+                        ael.as_slice().len()
                     );
                     for &ab_idx in ael.as_slice() {
                         eprintln!(

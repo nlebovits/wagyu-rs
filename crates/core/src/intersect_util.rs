@@ -510,7 +510,8 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
                 // C++: prepend remove to keep (x y z a b c)
                 let mut new_points = remove_points;
                 // Skip duplicate at join point (last of remove == first of keep)
-                if let (Some(rem_last), Some(keep_first)) = (new_points.last(), keep_points.first()) {
+                if let (Some(rem_last), Some(keep_first)) = (new_points.last(), keep_points.first())
+                {
                     if rem_last == keep_first {
                         new_points.pop();
                     }
@@ -861,7 +862,8 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
                     if crate::debug::debug_enabled() {
                         eprintln!(
                             "[MERGE_SEARCH] Looking for bounds with ring={}, AEL has {} bounds",
-                            remove_ring_idx, ael.as_slice().len()
+                            remove_ring_idx,
+                            ael.as_slice().len()
                         );
                         for &ab_idx in ael.as_slice() {
                             eprintln!(

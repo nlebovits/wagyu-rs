@@ -51,6 +51,7 @@ struct OracleInput {
 }
 
 /// Output format: MultiPolygon as nested arrays
+#[allow(dead_code)] // Prepared for future oracle output formatting
 #[derive(Debug, Serialize)]
 struct OracleOutput(Vec<Vec<Vec<[i64; 2]>>>);
 

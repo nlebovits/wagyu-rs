@@ -5792,8 +5792,8 @@ mod collinear_edge_tests {
 
         // After merging: one ring should be removed, the other survives.
         // The merged ring covers the full 10x10 rectangle = 4 corner points.
-        let a_exists = manager.get(idx_a).map(|r| r.len() > 0).unwrap_or(false);
-        let b_exists = manager.get(idx_b).map(|r| r.len() > 0).unwrap_or(false);
+        let a_exists = manager.get(idx_a).map(|r| !r.is_empty()).unwrap_or(false);
+        let b_exists = manager.get(idx_b).map(|r| !r.is_empty()).unwrap_or(false);
 
         // Exactly one ring should survive (the other was deleted)
         assert!(
@@ -5976,7 +5976,7 @@ mod collinear_edge_tests {
         for &idx in &survivors {
             let len = manager.get(idx).unwrap().len();
             assert!(
-                len >= 4 && len <= 6,
+                (4..=6).contains(&len),
                 "Surviving ring {} should have 4-6 corners (rectangle or L-shape), got {}",
                 idx,
                 len
@@ -6055,16 +6055,8 @@ mod collinear_edge_tests {
         if a_exists && b_exists {
             // No merge happened - they only touch at a point, not share an edge
             // This is actually correct behavior! L-shapes require edge sharing.
-            assert_eq!(
-                manager.get(idx_a).unwrap().len(),
-                4,
-                "Ring A unchanged"
-            );
-            assert_eq!(
-                manager.get(idx_b).unwrap().len(),
-                4,
-                "Ring B unchanged"
-            );
+            assert_eq!(manager.get(idx_a).unwrap().len(), 4, "Ring A unchanged");
+            assert_eq!(manager.get(idx_b).unwrap().len(), 4, "Ring B unchanged");
         } else {
             // Merge happened - one ring should survive with 6 corners
             assert!(
