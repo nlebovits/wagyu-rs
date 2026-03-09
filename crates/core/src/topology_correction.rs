@@ -3365,7 +3365,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
 
     // PORT FROM: C++ lines 487-518
     // Determine ring_origin, ring_search, ring_parent, and point assignments
-    #[allow(clippy::type_complexity)] // TODO(#95): Refactor tuple to named struct
+    #[allow(clippy::type_complexity)] // Issue #85: Refactor tuple to named struct
     let (ring_origin, ring_search, ring_parent_idx, op_origin_1, op_origin_2): (
         usize,
         usize,
@@ -3664,7 +3664,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
 ///
 /// This is a DFS that searches for a chain of connections that leads back
 /// to ring_origin, building the i_list as it goes.
-#[allow(clippy::too_many_arguments)] // TODO(#95): Refactor to options struct
+#[allow(clippy::too_many_arguments)] // Issue #86: Refactor to options struct
 fn find_intersect_loop<T: CoordNum + Copy>(
     manager: &crate::build_result::RingManager<T>,
     connection_map: &ConnectionMap,
@@ -3808,7 +3808,7 @@ fn find_intersect_loop<T: CoordNum + Copy>(
 /// 3. Apply all swap operations (primary + chain) to this map
 /// 4. Traverse from each origin to build exactly 2 fragments
 /// 5. Assign fragments to rings, clear absorbed rings
-#[allow(clippy::too_many_arguments)] // TODO(#95): Refactor to options struct
+#[allow(clippy::too_many_arguments)] // Issue #86: Refactor to options struct
 fn merge_rings_at_intersection<T: CoordNum + Copy>(
     manager: &mut crate::build_result::RingManager<T>,
     _connection_map: &mut ConnectionMap,

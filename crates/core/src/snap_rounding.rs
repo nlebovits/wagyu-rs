@@ -420,10 +420,9 @@ fn update_current_x<T: CoordNum>(bounds: &mut [HotPixelBound<T>], y: T) {
 /// Process intersections at current scanline using bubble sort.
 ///
 /// PORT FROM: wagyu snap_rounding.hpp - process_hot_pixel_intersections
-#[allow(clippy::ptr_arg)]
 fn process_hot_pixel_intersections<T: CoordNum + ToPrimitive>(
     _top_y: T,
-    active_bounds: &mut Vec<HotPixelBound<T>>,
+    active_bounds: &mut [HotPixelBound<T>],
     manager: &mut crate::build_result::RingManager<T>,
 ) {
     if active_bounds.is_empty() {

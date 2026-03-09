@@ -50,8 +50,11 @@ struct OracleInput {
     clip: Vec<Vec<Vec<[i64; 2]>>>,
 }
 
-/// Output format: MultiPolygon as nested arrays
-#[allow(dead_code)] // Prepared for future oracle output formatting
+/// Output format: MultiPolygon as nested arrays.
+///
+/// Reserved for future oracle output formatting when direct Rust-to-JSON
+/// result serialization is implemented.
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct OracleOutput(Vec<Vec<Vec<[i64; 2]>>>);
 

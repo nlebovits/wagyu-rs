@@ -793,7 +793,7 @@ pub fn process_edges_at_top_of_scanbeam<T: CoordNum + ToPrimitive>(
         if is_intermediate(bound, scanline_y) && next_edge_would_be_horizontal(bound) {
             // PORT FROM: C++ lines 91-97
             if bound.ring.is_some() {
-                // Insert hot pixels (TODO: implement hot pixel insertion)
+                // Hot pixel insertion skipped - snap rounding not yet integrated
                 let edge_top = bound.current_edge().top;
                 ring_util::add_point_to_ring(
                     bound_idx,
