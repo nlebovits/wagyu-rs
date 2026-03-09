@@ -119,3 +119,55 @@ Both implementations output structured logs to stderr:
 When `--debug` is passed to compare.sh, both logs are captured and diffed to help identify where the algorithms diverge.
 
 **Note:** The C++ oracle can only log input/output (not internal algorithm state) because the wagyu library is header-only and would require source modification for deeper instrumentation. The Rust implementation has full internal logging.
+
+## Fuzz Testing
+
+The `fuzz.py` script generates random polygon pairs and validates Rust output matches C++ oracle output.
+
+### Usage
+
+```bash
+# Run 500 test cases (default)
+./tools/oracle/fuzz.py
+
+# Run custom number of cases with reproducible seed
+./tools/oracle/fuzz.py --count 1000 --seed 12345
+
+# Control parallelism
+./tools/oracle/fuzz.py --parallel 4
+```
+
+### What It Generates
+
+The fuzzer generates four types of polygon pairs:
+- **Convex polygons**: 3-20 vertices placed on a circle
+- **Concave polygons**: 5-50 vertices with varying radii (star-like)
+- **Polygons with holes**: Convex exterior with convex hole
+- **Multi-polygons**: 2-4 separate simple polygons
+
+Coordinate ranges vary: small (-10 to 10), medium (-100 to 100), and large (-1000 to 1000) integers.
+
+### Output
+
+- Progress updates during execution
+- Summary report with pass/fail/error counts
+- Failure files saved to `tools/oracle/fuzz_failures/` for reproduction
+
+### Reproducing Failures
+
+```bash
+# Each failure is saved with operation and fill type in filename
+./tools/oracle/compare.sh tools/oracle/fuzz_failures/failure_42_union_evenodd.json union evenodd
+
+# With debug output
+./tools/oracle/compare.sh tools/oracle/fuzz_failures/failure_42_union_evenodd.json union evenodd --debug
+```
+
+### Current Status
+
+As of the initial fuzz run (seed 12345):
+- **500 test cases × 4 operations = 2000 comparisons**
+- **114 passed (5.7%)**
+- **1886 failed (94.3%)**
+
+The golden test suite (148 tests) represents the subset where both implementations agree. Random inputs expose edge cases in topology correction that are known gaps in the Rust port.

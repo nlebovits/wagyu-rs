@@ -6,6 +6,7 @@ Cargo.lock
 
 # Test outputs
 tests/fixtures/output/
+tools/oracle/fuzz_failures/
 
 # Coverage
 tarpaulin-report.html
