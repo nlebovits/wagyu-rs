@@ -3143,6 +3143,36 @@ struct PointInfo<T: CoordNum> {
     point_idx: usize,
 }
 
+/// Context for processing a single intersection between two rings.
+///
+/// This struct replaces a complex 5-tuple that was used internally in
+/// `process_single_intersection`. It captures the key information needed
+/// to track and process an intersection point shared by two rings.
+///
+/// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp
+///            Variables assigned in lines 487-518 of `process_single_intersection`
+#[derive(Debug, Clone, Copy)]
+struct IntersectionContext {
+    /// The "origin" ring index - when one ring is exterior and one is hole,
+    /// this is the exterior ring. When both are holes, this is the first hole.
+    ring_origin: usize,
+
+    /// The "search" ring index - the other ring involved in the intersection.
+    ring_search: usize,
+
+    /// The parent ring index, if any. For exterior-hole pairs, this equals
+    /// `ring_origin`. For hole-hole pairs, this is the parent of the first hole.
+    ring_parent_idx: Option<usize>,
+
+    /// First point of the intersection: (ring_idx, point_idx).
+    /// Points to a vertex in `ring_origin`.
+    op_origin_1: (usize, usize),
+
+    /// Second point of the intersection: (ring_idx, point_idx).
+    /// Points to a vertex in `ring_search`.
+    op_origin_2: (usize, usize),
+}
+
 /// Connection map entry - tracks connections from one ring to others.
 ///
 /// PORT FROM: C++ uses `unordered_multimap<ring_ptr, point_ptr_pair>`
@@ -3365,41 +3395,41 @@ fn process_single_intersection<T: CoordNum + Copy>(
 
     // PORT FROM: C++ lines 487-518
     // Determine ring_origin, ring_search, ring_parent, and point assignments
-    #[allow(clippy::type_complexity)] // TODO(#95): Refactor tuple to named struct
-    let (ring_origin, ring_search, ring_parent_idx, op_origin_1, op_origin_2): (
-        usize,
-        usize,
-        Option<usize>,
-        (usize, usize), // (ring_idx, point_idx)
-        (usize, usize),
-    ) = if !ring_j_is_hole {
+    let ctx = if !ring_j_is_hole {
         // ring_j is exterior (not hole), ring_k is hole
-        (
-            ring_j_idx,
-            ring_k_idx,
-            Some(ring_j_idx), // ring_parent = ring_origin for exterior
-            (ring_j_idx, pt_j.point_idx),
-            (ring_k_idx, pt_k.point_idx),
-        )
+        IntersectionContext {
+            ring_origin: ring_j_idx,
+            ring_search: ring_k_idx,
+            ring_parent_idx: Some(ring_j_idx), // ring_parent = ring_origin for exterior
+            op_origin_1: (ring_j_idx, pt_j.point_idx),
+            op_origin_2: (ring_k_idx, pt_k.point_idx),
+        }
     } else if !ring_k_is_hole {
         // ring_k is exterior, ring_j is hole
-        (
-            ring_k_idx,
-            ring_j_idx,
-            Some(ring_k_idx),
-            (ring_k_idx, pt_k.point_idx),
-            (ring_j_idx, pt_j.point_idx),
-        )
+        IntersectionContext {
+            ring_origin: ring_k_idx,
+            ring_search: ring_j_idx,
+            ring_parent_idx: Some(ring_k_idx),
+            op_origin_1: (ring_k_idx, pt_k.point_idx),
+            op_origin_2: (ring_j_idx, pt_j.point_idx),
+        }
     } else {
         // Both are holes - use ring_j as origin, parent is ring_j's parent
-        (
-            ring_j_idx,
-            ring_k_idx,
-            ring_j_parent,
-            (ring_j_idx, pt_j.point_idx),
-            (ring_k_idx, pt_k.point_idx),
-        )
+        IntersectionContext {
+            ring_origin: ring_j_idx,
+            ring_search: ring_k_idx,
+            ring_parent_idx: ring_j_parent,
+            op_origin_1: (ring_j_idx, pt_j.point_idx),
+            op_origin_2: (ring_k_idx, pt_k.point_idx),
+        }
     };
+
+    // Extract fields for easier use (these may be reassigned later)
+    let ring_origin = ctx.ring_origin;
+    let ring_search = ctx.ring_search;
+    let ring_parent_idx = ctx.ring_parent_idx;
+    let op_origin_1 = ctx.op_origin_1;
+    let op_origin_2 = ctx.op_origin_2;
 
     // PORT FROM: C++ lines 514-518
     // Check parent compatibility
