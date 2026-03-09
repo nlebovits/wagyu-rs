@@ -367,15 +367,12 @@ pub fn add_ring_to_local_minima_list<T: CoordNum>(
                 .unwrap_or(0.0);
             if max_x > min_x {
                 // minimum_is_left = true
-                // TODO(#78): Enable this once Vatti horizontal processing is fixed
-                // The move_horizontals function is correct, but enabling it exposes
-                // a bug in process_horizontal_right_to_left that corrupts AEL ordering.
-                // See: https://github.com/nlebovits/wagyu-rs/issues/78
+                // TODO(#94): Enable once process_horizontal_right_to_left is fixed
                 // move_horizontals_on_left_to_right(&mut to_minimum, &mut to_maximum);
                 true
             } else {
                 // minimum_is_left = false
-                // TODO(#78): Enable this once Vatti horizontal processing is fixed
+                // TODO(#94): Enable once process_horizontal_right_to_left is fixed
                 // move_horizontals_on_left_to_right(&mut to_maximum, &mut to_minimum);
                 false
             }
