@@ -245,12 +245,21 @@ fn move_horizontals_on_left_to_right<T: CoordNum + ToPrimitive>(
         return;
     }
 
-    debug_log!("[MOVE_HORIZ] Moving {} horizontal edges: left has {} edges, right has {} edges",
-        horizontal_count, left_edges.len(), right_edges.len());
+    debug_log!(
+        "[MOVE_HORIZ] Moving {} horizontal edges: left has {} edges, right has {} edges",
+        horizontal_count,
+        left_edges.len(),
+        right_edges.len()
+    );
     for (i, e) in left_edges.iter().take(horizontal_count).enumerate() {
-        debug_log!("[MOVE_HORIZ]   H{}: bot=({},{}) top=({},{})",
-            i, e.bot.x.to_f64().unwrap_or(0.0), e.bot.y.to_f64().unwrap_or(0.0),
-            e.top.x.to_f64().unwrap_or(0.0), e.top.y.to_f64().unwrap_or(0.0));
+        debug_log!(
+            "[MOVE_HORIZ]   H{}: bot=({},{}) top=({},{})",
+            i,
+            e.bot.x.to_f64().unwrap_or(0.0),
+            e.bot.y.to_f64().unwrap_or(0.0),
+            e.top.x.to_f64().unwrap_or(0.0),
+            e.top.y.to_f64().unwrap_or(0.0)
+        );
     }
 
     // Extract the horizontal edges from left
@@ -265,8 +274,11 @@ fn move_horizontals_on_left_to_right<T: CoordNum + ToPrimitive>(
         right_edges.insert(i, h);
     }
 
-    debug_log!("[MOVE_HORIZ] After move: left has {} edges, right has {} edges",
-        left_edges.len(), right_edges.len());
+    debug_log!(
+        "[MOVE_HORIZ] After move: left has {} edges, right has {} edges",
+        left_edges.len(),
+        right_edges.len()
+    );
 }
 
 /// Fix horizontal edge directions in a bound to maintain connectivity.
@@ -806,9 +818,8 @@ mod tests {
             Edge::new(Point::new(0.0, 5.0), Point::new(10.0, 5.0)), // Horizontal: bot.x=0, top.x=10
             Edge::new(Point::new(10.0, 5.0), Point::new(15.0, 15.0)), // Non-horizontal
         ];
-        let mut right: EdgeList<f64> = vec![
-            Edge::new(Point::new(0.0, 5.0), Point::new(-5.0, 15.0)),
-        ];
+        let mut right: EdgeList<f64> =
+            vec![Edge::new(Point::new(0.0, 5.0), Point::new(-5.0, 15.0))];
 
         move_horizontals_on_left_to_right(&mut left, &mut right);
 
@@ -824,13 +835,12 @@ mod tests {
         // Multiple leading horizontals should be moved AND reversed in order
         // C++ does: reverse(begin, itr) then move to right
         let mut left: EdgeList<f64> = vec![
-            Edge::new(Point::new(0.0, 5.0), Point::new(5.0, 5.0)),   // H1: 0->5
-            Edge::new(Point::new(5.0, 5.0), Point::new(10.0, 5.0)),  // H2: 5->10
+            Edge::new(Point::new(0.0, 5.0), Point::new(5.0, 5.0)), // H1: 0->5
+            Edge::new(Point::new(5.0, 5.0), Point::new(10.0, 5.0)), // H2: 5->10
             Edge::new(Point::new(10.0, 5.0), Point::new(15.0, 15.0)), // Non-horizontal
         ];
-        let mut right: EdgeList<f64> = vec![
-            Edge::new(Point::new(0.0, 5.0), Point::new(-5.0, 15.0)),
-        ];
+        let mut right: EdgeList<f64> =
+            vec![Edge::new(Point::new(0.0, 5.0), Point::new(-5.0, 15.0))];
 
         move_horizontals_on_left_to_right(&mut left, &mut right);
 
