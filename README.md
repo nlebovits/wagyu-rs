@@ -17,6 +17,8 @@ Geometry boolean operations in Rust - port of [Mapbox wagyu](https://github.com/
 
 All output is guaranteed valid per [OGC standards](http://postgis.net/docs/using_postgis_dbmanagement.html#OGC_Validity).
 
+For algorithm details, see the [original wagyu documentation](https://github.com/mapbox/wagyu#documentation).
+
 ## Compatibility
 
 Fuzz-tested against the original C++ wagyu implementation:
