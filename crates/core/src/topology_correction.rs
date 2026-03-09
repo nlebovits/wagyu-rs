@@ -5751,7 +5751,7 @@ mod tests {
         assert!(manager.ring_is_hole(ring_b_idx));
 
         // Invoke merge: swap at (10,0), chain at (10,10)
-        let mut connection_map: ConnectionMap = HashMap::new();
+        let _connection_map: ConnectionMap = HashMap::new();
         let i_list = {
             let mut deq = VecDeque::new();
             deq.push_back((ring_b_idx, PointPtrPair::new(ring_a_idx, 2, ring_b_idx, 2)));
@@ -5906,7 +5906,7 @@ mod tests {
         // op_origin_1 = (ring_a, idx 1) = (10,0)
         // op_origin_2 = (ring_b, idx 0) = (10,0)
         // i_list = chain swap at ring_a idx 4 = (10,10) ↔ ring_b idx 3 = (10,10)
-        let mut connection_map: ConnectionMap = HashMap::new();
+        let _connection_map: ConnectionMap = HashMap::new();
         let i_list = {
             let mut deq = VecDeque::new();
             deq.push_back((ring_b_idx, PointPtrPair::new(ring_a_idx, 4, ring_b_idx, 3)));
