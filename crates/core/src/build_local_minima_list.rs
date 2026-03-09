@@ -225,6 +225,7 @@ fn create_bound_towards_maximum<T: CoordNum>(edges: &mut EdgeList<T>) -> EdgeLis
 ///     std::rotate(right_bound.edges.begin(), std::prev(right_bound.edges.end(), dist), right_bound.edges.end());
 /// }
 /// ```
+#[allow(dead_code)] // TODO(#95): Remove when move_horizontals is enabled
 fn move_horizontals_on_left_to_right<T: CoordNum + ToPrimitive>(
     left_edges: &mut EdgeList<T>,
     right_edges: &mut EdgeList<T>,
@@ -879,7 +880,7 @@ mod tests {
             Edge::new(Point::new(-5.0, 10.0), Point::new(-10.0, 15.0)),
         ];
 
-        let original_right_first = right[0].clone();
+        let original_right_first = right[0];
 
         move_horizontals_on_left_to_right(&mut left, &mut right);
 
