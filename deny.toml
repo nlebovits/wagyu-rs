@@ -23,8 +23,8 @@ ignore = []
 
 # === LICENSES ===
 # Ensure all dependencies use compatible licenses
+# Licenses not in 'allow' are denied by default
 [licenses]
-unlicensed = "deny"
 allow = [
     "BSL-1.0",      # Boost - our license
     "MIT",
@@ -37,7 +37,6 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
 ]
-copyleft = "warn"
 confidence-threshold = 0.8
 
 # === BANS ===
