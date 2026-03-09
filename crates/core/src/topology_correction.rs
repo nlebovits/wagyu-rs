@@ -2839,6 +2839,118 @@ fn insert_hole_vertices_on_parent_edges<T: CoordNum + Copy>(
     }
 }
 
+/// Insert hot pixels onto ring edges where they lie strictly on an edge.
+///
+/// Hot pixels are pre-computed intersection points from snap rounding. Some of these
+/// may lie on ring edges but not be present as ring vertices. This function inserts
+/// them, which helps correct_chained_rings detect shared points and properly split
+/// rings that share edges.
+///
+/// This is complementary to `insert_hole_vertices_on_parent_edges` which handles
+/// hole-parent relationships. This function handles all hot pixels regardless of
+/// ring relationships.
+fn insert_hot_pixels_onto_ring_edges<T: CoordNum + Copy>(
+    manager: &mut crate::build_result::RingManager<T>,
+) -> bool {
+    // Collect hot pixels as Coords
+    let hot_pixels: Vec<Coord<T>> = manager
+        .hot_pixels
+        .iter()
+        .map(|hp| Coord { x: hp.x, y: hp.y })
+        .collect();
+
+    if hot_pixels.is_empty() {
+        return false;
+    }
+
+    let mut any_inserted = false;
+
+    // Iterate over all rings
+    for ring_idx in 0..manager.len() {
+        let ring_points: Vec<Coord<T>> = match manager.get(ring_idx) {
+            Some(r) if r.points().len() >= 3 => r.points().to_vec(),
+            _ => continue,
+        };
+
+        let ring_len = ring_points.len();
+        let mut insertions: Vec<(usize, Coord<T>)> = Vec::new(); // (edge_start_idx, coord)
+
+        for hp in &hot_pixels {
+            // Skip if this hot pixel is already a vertex of the ring
+            let already_vertex = ring_points.iter().any(|rp| coords_equal(rp, hp));
+            if already_vertex {
+                continue;
+            }
+
+            // Check each edge
+            for edge_start in 0..ring_len {
+                let edge_end = (edge_start + 1) % ring_len;
+                if point_on_segment(hp, &ring_points[edge_start], &ring_points[edge_end]) {
+                    insertions.push((edge_start, *hp));
+                    break; // Each hot pixel can only be on one edge of this ring
+                }
+            }
+        }
+
+        if insertions.is_empty() {
+            continue;
+        }
+
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[TOPOLOGY] Inserting {} hot pixels onto ring {} ({} pts)",
+                insertions.len(),
+                ring_idx,
+                ring_len
+            );
+            for (edge_idx, coord) in &insertions {
+                eprintln!(
+                    "  [HP_INSERT] edge {} coord ({:?},{:?})",
+                    edge_idx,
+                    coord.x.to_f64(),
+                    coord.y.to_f64()
+                );
+            }
+        }
+
+        // Sort insertions: group by edge index (descending), within same edge
+        // sort by distance from edge start (descending for correct insertion order)
+        let rp = ring_points.clone();
+        insertions.sort_by(|a, b| {
+            if a.0 != b.0 {
+                b.0.cmp(&a.0) // Descending by edge index
+            } else {
+                // Same edge: sort by distance from edge start (descending)
+                let a_dist = {
+                    let dx = a.1.x.to_f64().unwrap_or(0.0) - rp[a.0].x.to_f64().unwrap_or(0.0);
+                    let dy = a.1.y.to_f64().unwrap_or(0.0) - rp[a.0].y.to_f64().unwrap_or(0.0);
+                    dx * dx + dy * dy
+                };
+                let b_dist = {
+                    let dx = b.1.x.to_f64().unwrap_or(0.0) - rp[b.0].x.to_f64().unwrap_or(0.0);
+                    let dy = b.1.y.to_f64().unwrap_or(0.0) - rp[b.0].y.to_f64().unwrap_or(0.0);
+                    dx * dx + dy * dy
+                };
+                b_dist
+                    .partial_cmp(&a_dist)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
+
+        // Apply insertions
+        if let Some(ring) = manager.get_mut(ring_idx) {
+            let points = ring.points_mut();
+            for (after_idx, coord) in &insertions {
+                points.insert(after_idx + 1, *coord);
+            }
+            ring.set_corrected(false); // Mark for re-processing
+        }
+        any_inserted = true;
+    }
+
+    any_inserted
+}
+
 /// Correct the topology of output rings to ensure OGC validity.
 ///
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/topology_correction.hpp - correct_topology
@@ -2928,6 +3040,21 @@ pub fn correct_topology<T: CoordNum + Copy>(manager: &mut crate::build_result::R
     // so that correct_chained_rings can detect shared points and split
     // the exterior ring into proper sub-regions.
     insert_hole_vertices_on_parent_edges(manager);
+
+    // Step 4c: Insert hot pixels onto ring edges.
+    //
+    // Hot pixels from snap rounding contain pre-computed edge-edge intersection
+    // points. Inserting these onto ring edges helps correct_chained_rings detect
+    // shared points between rings that cross at these intersection points.
+    if crate::debug::debug_enabled() {
+        eprintln!("[TOPOLOGY] Step 4c: insert_hot_pixels_onto_ring_edges");
+    }
+    let hp_inserted = insert_hot_pixels_onto_ring_edges(manager);
+    if hp_inserted {
+        // Re-run chained rings and self-intersection correction after inserting hot pixels
+        correct_chained_rings(manager);
+        correct_self_intersections(manager, true);
+    }
 
     // Step 5: Iteratively correct chained rings and self-intersections until stable
     // PORT FROM: C++ correct_topology lines 1339-1343

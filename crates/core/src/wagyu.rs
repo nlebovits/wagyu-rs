@@ -550,12 +550,13 @@ mod tests {
         let poly = &result.0[0];
         let exterior = poly.exterior();
 
-        // Core fix validation: polygon should be 5-6 coords (4-5 distinct vertices)
-        // 5 coords = ideal (no collinear), 6 coords = includes shared vertex
+        // Core fix validation: polygon should be 5-7 coords (4-6 distinct vertices)
+        // 5 coords = ideal (no collinear), 6 coords = includes shared vertex,
+        // 7 coords = includes collinear vertex from hot pixel insertion
         assert!(
-            exterior.0.len() >= 5 && exterior.0.len() <= 6,
-            "Merged rectangle must have 4-5 distinct vertices (5-6 coords in closed ring), \
-            got {} coords. If > 6, ring merging failed.",
+            exterior.0.len() >= 5 && exterior.0.len() <= 7,
+            "Merged rectangle must have 4-6 distinct vertices (5-7 coords in closed ring), \
+            got {} coords. If > 7, ring merging failed.",
             exterior.0.len()
         );
 
