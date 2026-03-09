@@ -86,6 +86,11 @@ pub fn next_edge_is_horizontal<T: CoordNum>(bound: &Bound<T>) -> bool {
 /// * `ael` - The active edge list
 ///
 /// PORT FROM: wagyu/include/mapbox/geometry/wagyu/active_bound_list.hpp - get_maxima_pair (lines 161-164)
+///
+/// FIX for issue #88: The C++ implementation ONLY uses the maximum_bound pointer
+/// to find maxima pairs. It does NOT search for bounds with matching top points.
+/// The previous Rust fallback search was finding incorrect pairs - bounds that
+/// happen to share a top point but are from different local minima.
 pub fn get_maxima_pair<T: CoordNum>(
     bound_pos: usize,
     bounds: &[Bound<T>],
@@ -95,32 +100,30 @@ pub fn get_maxima_pair<T: CoordNum>(
     let bound_idx = ael.get(bound_pos)?;
     let bound = bounds.get(bound_idx)?;
 
-    // PORT FROM: C++ uses maximum_bound pointer for O(1) lookup
-    // If maximum_bound is set, use it directly
-    if let Some(max_bound_idx) = bound.maximum_bound {
-        // Find this bound's position in the active edge list
-        return ael.position(max_bound_idx);
+    // PORT FROM: C++ get_maxima_pair (lines 162-165):
+    //   bound_ptr<T> maximum = (*bnd)->maximum_bound;
+    //   return std::find(active_bounds.begin(), active_bounds.end(), maximum);
+    //
+    // If maximum_bound is None (nullptr in C++), std::find returns end(),
+    // meaning no pair was found. We should NOT search for matching top points.
+    if crate::debug::debug_enabled() {
+        eprintln!(
+            "[GET_MAXIMA_PAIR] bound_pos={} bound_idx={} maximum_bound={:?}",
+            bound_pos, bound_idx, bound.maximum_bound
+        );
     }
 
-    // Fallback: Search for a bound with matching top point
-    // This is O(n) but handles cases where maximum_bound isn't set
-    let our_top = bound.current_edge().top;
+    let max_bound_idx = bound.maximum_bound?;
 
-    for pos in 0..ael.len() {
-        if pos == bound_pos {
-            continue;
-        }
-        if let Some(&other_idx) = ael.iter().nth(pos) {
-            if let Some(other_bound) = bounds.get(other_idx) {
-                let other_top = other_bound.current_edge().top;
-                if our_top == other_top {
-                    return Some(pos);
-                }
-            }
-        }
+    // Find this bound's position in the active edge list
+    let result = ael.position(max_bound_idx);
+    if crate::debug::debug_enabled() {
+        eprintln!(
+            "[GET_MAXIMA_PAIR] found pair_pos={:?}",
+            result
+        );
     }
-
-    None
+    result
 }
 
 // ============================================================================

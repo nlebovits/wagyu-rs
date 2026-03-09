@@ -263,7 +263,8 @@ pub fn process_horizontal_left_to_right<T: CoordNum + ToPrimitive>(
                         }
                         bounds[ab_idx].ring = Some(keep_ring_idx);
                         bounds[ab_idx].side = keep_side;
-                        // FIX #53: Don't break - update ALL bounds with removed ring
+                        // FIX #88: Restore C++ break - only update ONE bound per merge
+                        break;
                     }
                 }
             }
@@ -469,7 +470,8 @@ pub fn process_horizontal_right_to_left<T: CoordNum + ToPrimitive>(
                         }
                         bounds[ab_idx].ring = Some(keep_ring_idx);
                         bounds[ab_idx].side = keep_side;
-                        // FIX #53: Don't break - update ALL bounds with removed ring
+                        // FIX #88: Restore C++ break - only update ONE bound per merge
+                        break;
                     }
                 }
             }

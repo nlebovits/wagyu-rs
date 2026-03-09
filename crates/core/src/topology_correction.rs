@@ -2335,6 +2335,17 @@ pub fn correct_topology<T: CoordNum + Copy>(manager: &mut crate::build_result::R
             "[TOPOLOGY] Starting correct_topology with {} rings",
             manager.len()
         );
+        // Debug: show ring states BEFORE clear_merged_rings
+        for ring_idx in 0..manager.len() {
+            if let Some(ring) = manager.get(ring_idx) {
+                eprintln!(
+                    "[TOPOLOGY_RINGS] BEFORE clear_merged: ring {} has {} points, parent={:?}",
+                    ring_idx,
+                    ring.points().len(),
+                    ring.parent()
+                );
+            }
+        }
     }
 
     // Clear points from rings that were merged during Vatti sweep.

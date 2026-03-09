@@ -898,17 +898,39 @@ pub fn append_ring<T: CoordNum + Copy>(
         return;
     }
 
+    // DEBUG: Log ring point counts before merge decision
+    if crate::debug::debug_enabled() {
+        let r1_pts = rings.get(ring1_idx).map(|r| r.points().len()).unwrap_or(0);
+        let r2_pts = rings.get(ring2_idx).map(|r| r.points().len()).unwrap_or(0);
+        eprintln!(
+            "[APPEND_RING_DECIDE] ring1={} ({} pts) ring2={} ({} pts)",
+            ring1_idx, r1_pts, ring2_idx, r2_pts
+        );
+    }
+
     // Determine which ring to keep based on hierarchy and bottom point position
     // PORT FROM: C++ append_ring logic (lines 510-530)
     let (keep_ring_idx, keep_bound_idx, remove_ring_idx, remove_bound_idx) =
         if ring1_child_below_ring2(ring1_idx, ring2_idx, rings) {
+            if crate::debug::debug_enabled() {
+                eprintln!("[APPEND_RING_DECIDE] ring1_child_below_ring2({}, {}) = true", ring1_idx, ring2_idx);
+            }
             (ring2_idx, b2_idx, ring1_idx, b1_idx)
         } else if ring1_child_below_ring2(ring2_idx, ring1_idx, rings) {
+            if crate::debug::debug_enabled() {
+                eprintln!("[APPEND_RING_DECIDE] ring1_child_below_ring2({}, {}) = true", ring2_idx, ring1_idx);
+            }
             (ring1_idx, b1_idx, ring2_idx, b2_idx)
         } else if ring1_idx == get_lower_most_ring(ring1_idx, ring2_idx, rings) {
+            if crate::debug::debug_enabled() {
+                eprintln!("[APPEND_RING_DECIDE] get_lower_most_ring({}, {}) = {}", ring1_idx, ring2_idx, ring1_idx);
+            }
             // Use get_lower_most_ring to determine which ring to keep
             (ring1_idx, b1_idx, ring2_idx, b2_idx)
         } else {
+            if crate::debug::debug_enabled() {
+                eprintln!("[APPEND_RING_DECIDE] get_lower_most_ring({}, {}) = {}", ring1_idx, ring2_idx, ring2_idx);
+            }
             (ring2_idx, b2_idx, ring1_idx, b1_idx)
         };
 
@@ -985,9 +1007,11 @@ pub fn append_ring<T: CoordNum + Copy>(
             }
             bounds[ab_idx].ring = Some(keep_ring_idx);
             bounds[ab_idx].side = keep_side;
-            // FIX #53: Don't break - update ALL bounds with removed ring
-            // C++ breaks because pointer comparison is unique.
-            // In Rust, multiple bounds can share the same ring index.
+            // FIX #88: Restore C++ break - only update ONE bound per merge
+            // The C++ break exists because at most one OTHER bound references
+            // the removed ring (two bounds form one ring, two are already nulled).
+            // Updating all causes cascading ring reassignments.
+            break;
         }
     }
 

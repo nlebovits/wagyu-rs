@@ -484,6 +484,19 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
         None => Vec::new(),
     };
 
+    // DEBUG: Log the point counts before merge
+    if crate::debug::debug_enabled() {
+        let keep_count = manager.get(keep_idx).map(|r| r.points().len()).unwrap_or(0);
+        eprintln!(
+            "[MERGE_BEFORE] keep_ring={} has {} points, remove_ring={} has {} points",
+            keep_idx, keep_count, remove_idx, remove_points.len()
+        );
+        eprintln!(
+            "[MERGE_SIDES] keep_side={:?}, remove_side={:?}",
+            keep_side, remove_side
+        );
+    }
+
     // Merge points based on sides
     // PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp lines 544-576
     if let Some(keep_ring) = manager.get_mut(keep_idx) {
@@ -540,6 +553,14 @@ fn merge_rings_at_intersection<T: CoordNum + Copy>(
                 }
                 keep_points.extend(remove);
             }
+        }
+
+        // DEBUG: Log point count after merge
+        if crate::debug::debug_enabled() {
+            eprintln!(
+                "[MERGE_AFTER] keep_ring={} now has {} points",
+                keep_idx, keep_points.len()
+            );
         }
     }
 
@@ -880,9 +901,11 @@ pub fn process_intersect_list<T: CoordNum + ToPrimitive>(
                             }
                             bounds[ab_idx].ring = Some(keep_ring_idx);
                             bounds[ab_idx].side = keep_side;
-                            // FIX #53: Don't break - update ALL bounds with removed ring
-                            // C++ breaks because pointer comparison is unique.
-                            // In Rust, multiple bounds can share the same ring index.
+                            // FIX #88: Restore C++ break - only update ONE bound per merge
+                            // The C++ break exists because at most one OTHER bound references
+                            // the removed ring (two bounds form one ring, two are already nulled).
+                            // Updating all causes cascading ring reassignments.
+                            break;
                         }
                     }
                 }

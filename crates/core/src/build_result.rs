@@ -60,8 +60,18 @@ impl<T: CoordNum> RingManager<T> {
     /// Clear points from all rings that were marked as merged.
     /// Call this at the start of topology correction.
     pub fn clear_merged_rings(&mut self) {
+        if crate::debug::debug_enabled() {
+            eprintln!("[CLEAR_MERGED] merged_rings={:?}", self.merged_rings);
+        }
         for &ring_idx in &self.merged_rings.clone() {
             if let Some(ring) = self.rings.get_mut(ring_idx) {
+                if crate::debug::debug_enabled() {
+                    eprintln!(
+                        "[CLEAR_MERGED] Clearing ring {} which had {} points",
+                        ring_idx,
+                        ring.points().len()
+                    );
+                }
                 ring.points_mut().clear();
             }
         }
