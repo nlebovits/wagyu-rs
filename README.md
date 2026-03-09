@@ -1,5 +1,7 @@
 # wagyu-rs
 
+> This library is a port of Wagyu into Rust from the original C++. Although 100% of golden tests from the original library pass, code has still been generated completely with Claude. Please take it with a grain of salt until it stabilizes. --Nissim
+
 > **Beta**: Ready for testing in tile generation workflows. See [Compatibility](#compatibility) below.
 
 [![CI](https://github.com/nlebovits/wagyu-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/nlebovits/wagyu-rs/actions/workflows/ci.yml)
