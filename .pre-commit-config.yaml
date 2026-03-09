@@ -85,7 +85,7 @@ repos:
     rev: v2.4.1
     hooks:
       - id: codespell
-        args: ['--skip', '*.lock,target/*,.git/*,*.json', '--ignore-words-list', 'crate,nd,ot']
+        args: ['--skip', '*.lock,target/*,.git/*,*.json', '--ignore-words-list', 'crate,nd,ot,abl']
         exclude: ^(target/|\.git/)
 
   # === COMMITIZEN ===

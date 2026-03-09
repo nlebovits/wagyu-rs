@@ -19,7 +19,8 @@ dev = [
 [tool.codespell]
 skip = "*.lock,target/*,.git/*,*.json,*.parquet"
 # Common Rust/geometry terms that might be flagged
-ignore-words-list = "crate,nd,ot"
+# abl = Active Bound List (wagyu algorithm term)
+ignore-words-list = "crate,nd,ot,abl"
 
 # ---------- commitizen ----------
 # Note: Main commitizen config is in .cz.toml for Rust compatibility
