@@ -3843,9 +3843,7 @@ fn find_intersect_loop<T: CoordNum + Copy>(
 
             // Check parent compatibility
             let it_ring_parent = manager.get(it_ring).and_then(|r| r.parent());
-            if params.ring_parent_idx != Some(it_ring)
-                && params.ring_parent_idx != it_ring_parent
-            {
+            if params.ring_parent_idx != Some(it_ring) && params.ring_parent_idx != it_ring_parent {
                 continue;
             }
 
