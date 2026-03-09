@@ -33,8 +33,6 @@ When deviating from C++:
 // C++ does X (see file.hpp:L45), Rust does Y because [ownership/etc.]
 ```
 
-Document divergences in `context/ARCHITECTURE.md`.
-
 ### Ownership Strategy
 
 Use `Vec` + `usize` indices for graph structures. No `Rc<RefCell<>>`, no arena allocators, no unsafe.
