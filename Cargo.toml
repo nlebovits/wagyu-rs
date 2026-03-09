@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Nissim Lebovits <nlebovits@pm.me>"]
@@ -18,7 +18,7 @@ categories = ["science", "algorithms", "mathematics"]
 
 [workspace.dependencies]
 # Internal crates
-wagyu-rs = { path = "crates/core", version = "0.1.1" }
+wagyu-rs = { path = "crates/core", version = "0.2.0" }
 
 # Core geometry
 geo = "0.32"
