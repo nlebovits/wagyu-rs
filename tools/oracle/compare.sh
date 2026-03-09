@@ -98,12 +98,13 @@ else
     fi
 fi
 
-# Compare outputs (normalized JSON)
+# Compare outputs (normalized geometry)
 echo "Comparing outputs..." >&2
 
-# Use jq to normalize JSON (sort arrays, consistent formatting)
-CPP_NORMALIZED=$(jq -S '.' "$CPP_OUT" 2>/dev/null || cat "$CPP_OUT")
-RUST_NORMALIZED=$(jq -S '.' "$RUST_OUT" 2>/dev/null || cat "$RUST_OUT")
+# Normalize geometries (handles ring rotation, polygon ordering)
+NORMALIZE="$SCRIPT_DIR/normalize_geometry.py"
+CPP_NORMALIZED=$("$NORMALIZE" "$CPP_OUT" 2>/dev/null || jq -S '.' "$CPP_OUT" 2>/dev/null || cat "$CPP_OUT")
+RUST_NORMALIZED=$("$NORMALIZE" "$RUST_OUT" 2>/dev/null || jq -S '.' "$RUST_OUT" 2>/dev/null || cat "$RUST_OUT")
 
 if [ "$CPP_NORMALIZED" = "$RUST_NORMALIZED" ]; then
     echo "MATCH" >&2

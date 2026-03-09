@@ -167,7 +167,16 @@ Coordinate ranges vary: small (-10 to 10), medium (-100 to 100), and large (-100
 
 As of the initial fuzz run (seed 12345):
 - **500 test cases × 4 operations = 2000 comparisons**
-- **114 passed (5.7%)**
-- **1886 failed (94.3%)**
+- **1090 passed (54.5%)**
+- **910 failed (45.5%)**
 
-The golden test suite (148 tests) represents the subset where both implementations agree. Random inputs expose edge cases in topology correction that are known gaps in the Rust port.
+The golden test suite (148 tests) represents carefully selected cases. Random inputs expose edge cases in topology correction that are known gaps in the Rust port. The ~45% divergence rate indicates significant work remains on complex polygon handling.
+
+### Geometry Normalization
+
+The oracle uses `normalize_geometry.py` to compare outputs geometrically rather than syntactically. This handles:
+- **Ring rotation**: Same ring starting at different vertices
+- **Ring ordering**: Holes in different order within a polygon
+- **Polygon ordering**: Multi-polygon components in different order
+
+Without normalization, many "failures" are actually identical geometries with different JSON representations.
