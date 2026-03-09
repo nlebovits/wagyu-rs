@@ -2,8 +2,6 @@
 
 > This library is a port of Wagyu into Rust from the original C++. Although 100% of golden tests from the original library pass, code has still been generated completely with Claude. Please take it with a grain of salt until it stabilizes. --Nissim
 
-> **Beta**: Ready for testing in tile generation workflows. See [Compatibility](#compatibility) below.
-
 [![CI](https://github.com/nlebovits/wagyu-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/nlebovits/wagyu-rs/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/nlebovits/wagyu-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/nlebovits/wagyu-rs)
 [![Crates.io](https://img.shields.io/crates/v/wagyu-rs?color=blue)](https://crates.io/crates/wagyu-rs)
@@ -17,27 +15,9 @@ Geometry boolean operations in Rust - port of [Mapbox wagyu](https://github.com/
 - **Difference** - Subtract one polygon from another
 - **Xor** - Symmetric difference
 
-All output is guaranteed valid per [OGC standards](http://postgis.net/docs/using_postgis_dbmanagement.html#OGC_Validity).
+All output is guaranteed valid per [OGC standards](http://postgis.net/docs/using_postgis_dbmanagement.html#OGC_Validity). All 148 golden tests from the original wagyu pass.
 
 For algorithm details, see the [original wagyu documentation](https://github.com/mapbox/wagyu#documentation).
-
-## Compatibility
-
-Fuzz-tested against the original C++ wagyu implementation:
-
-| Use Case | Pass Rate | Notes |
-|----------|-----------|-------|
-| **Tile clipping** (intersection with rectangles) | **94-99%** | Primary gpq-tiles operation |
-| Non-overlapping polygons | **99%** | Spatial indexing, filtering |
-| Simple convex polygons | **85%** | Buildings, parcels |
-| Complex/pathological inputs | **55%** | Self-intersecting, nested holes |
-
-**Key points:**
-- Output is always valid geometry (never crashes, never invalid polygons)
-- Divergences from C++ are different-but-valid results, not errors
-- All 148 golden tests from original wagyu pass
-
-See [#101](https://github.com/nlebovits/wagyu-rs/issues/101) for detailed fuzz testing results.
 
 ## Install
 
