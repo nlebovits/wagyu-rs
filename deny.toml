@@ -1,0 +1,62 @@
+# cargo-deny configuration
+# Run: cargo deny check
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Target platforms to check
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+# === ADVISORIES ===
+# Check for known security vulnerabilities
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+ignore = []
+
+# === LICENSES ===
+# Ensure all dependencies use compatible licenses
+[licenses]
+unlicensed = "deny"
+allow = [
+    "BSL-1.0",      # Boost - our license
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+]
+copyleft = "warn"
+confidence-threshold = 0.8
+
+# === BANS ===
+# Prevent problematic dependencies
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+# Allow specific duplicate dependencies (sometimes unavoidable)
+skip = []
+
+# Deny specific crates entirely
+deny = []
+
+# === SOURCES ===
+# Control where dependencies can come from
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

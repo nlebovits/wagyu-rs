@@ -1,0 +1,61 @@
+# Architecture rules for wagyu-rs
+# Enforced by scripts/validate_architecture.py
+# Philosophy: Explicit module boundaries prevent accidental coupling
+
+# === CONTRACTS ===
+
+[[contracts]]
+id = "core-no-cli"
+name = "Core library cannot import CLI"
+type = "forbidden"
+description = "The core library (wagyu-rs) must be usable without CLI dependencies"
+source_modules = ["wagyu_rs"]
+forbidden_modules = ["wagyu_cli", "wagyu_rs_cli"]
+
+[[contracts]]
+id = "point-is-foundational"
+name = "Point module has no internal dependencies"
+type = "independence"
+description = "point.rs is foundational - it cannot import other wagyu modules"
+modules = ["wagyu_rs::point"]
+# This module should only depend on std and external crates
+
+[[contracts]]
+id = "config-is-foundational"
+name = "Config module has no internal dependencies"
+type = "independence"
+description = "config.rs defines enums used everywhere - must not import other wagyu modules"
+modules = ["wagyu_rs::config"]
+
+# NOTE: error.rs currently imports interrupt module. Commented out until refactored.
+# [[contracts]]
+# id = "error-is-foundational"
+# name = "Error module has no internal dependencies"
+# type = "independence"
+# description = "error.rs is foundational - must not import other wagyu modules"
+# modules = ["wagyu_rs::error"]
+
+[[contracts]]
+id = "no-std-io-in-core"
+name = "Core avoids std::io for future no_std"
+type = "forbidden_pattern"
+description = "Prepare for potential no_std support by avoiding std::io"
+source_modules = ["wagyu_rs"]
+forbidden_patterns = ["use std::io"]
+exceptions = ["debug.rs"]  # Debug output is allowed to use io
+
+[[contracts]]
+id = "test-utils-not-in-lib"
+name = "Test utilities stay in tests"
+type = "forbidden"
+description = "Test helpers should not leak into the library"
+source_modules = ["wagyu_rs"]
+forbidden_modules = ["wagyu_rs::test_utils"]
+# golden.rs is an exception - it's a test harness that ships with the lib
+
+# === LAYERS ===
+# Future: Define explicit layer ordering
+# Layer 1 (foundational): point, config, error
+# Layer 2 (data structures): bound, ring, local_minimum
+# Layer 3 (algorithms): vatti, intersect, topology_correction
+# Layer 4 (orchestration): wagyu (main entry point)

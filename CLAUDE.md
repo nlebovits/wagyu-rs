@@ -1,5 +1,7 @@
 # wagyu-rs
 
+<!-- freshness: 2026-03-09 -->
+
 Rust port of [Mapbox wagyu](https://github.com/mapbox/wagyu) C++ polygon clipping library.
 
 ## Critical Constraints
@@ -14,7 +16,7 @@ GREEN  → Write minimum code to pass
 REFACTOR → Clean up while tests stay green
 ```
 
-Run pre-commit hooks: `git config core.hooksPath .githooks`
+Run pre-commit hooks: `pre-commit install`
 
 ### Reference Implementation
 
@@ -73,17 +75,43 @@ cd tools/oracle && ./build_oracle.sh
 
 ### Debug Logging
 
+<!-- BEGIN AUTO-GENERATED: debug-flags -->
 Enable with `WAGYU_DEBUG=1`:
-```bash
-WAGYU_DEBUG=1 cargo test test_name -- --nocapture
-```
 
-Debug output includes:
-- `[RING_NEW]` - Ring creation with initial point
-- `[RING_POINT]` - Point added to ring (front/back)
-- `[RING_MERGE]` - Ring merge operations
-- `[RING_CLOSE]` - Final ring point counts
-- `[TOPOLOGY]` - Topology correction steps
+- `[AEL_ADD]` - / Log an active edge list addition.
+- `[AEL_REMOVE]` - / Log an active edge list removal.
+- `[APPEND_RING_END]` - In Rust, multiple bounds can share the same ring index.
+- `[APPEND_RING_START]` - DEBUG: Log all bounds' ring assignments before merge
+- `[BOUND_UPDATE]`
+- `[CONTRIBUTING]` - / Log contributing edge decision.
+- `[HORIZONTAL]` - / Log horizontal edge processing.
+- `[HORIZ_INTERSECT]` - BUGFIX: Capture and handle IntersectResult to update other bounds
+- `[HORIZ_MERGE_SEARCH]` - Update other active bounds that reference the removed ring
+- `[HORIZ_MERGE_SEARCH_L]` - Update other active bounds that reference the removed ring
+- `[INTERSECT]` - / Log an intersection detection.
+- `[INTERSECT_RESULT]` - / Log intersection handling result.
+- `[LOCAL_MIN]` - / Log local minimum insertion.
+- `[MERGE_RINGS]` - DEBUG: Log which bounds/rings are being merged
+- `[MERGE_SEARCH]` - PORT FROM: wagyu/include/mapbox/geometry/wagyu/ring_util.hpp - append_ring (lines 597-606)
+- `[RING_CLOSE]` - / Log a ring close operation.
+- `[RING_MERGE]` - / Log a ring merge operation.
+- `[RING_NEW]` - / Log a new ring creation.
+- `[RING_POINT]` - / Log a point added to a ring.
+- `[SCANBEAM]` - / Log a scanbeam event.
+- `[SET_PARENT]`
+- `[TOPOLOGY]` - reverse the ring to fix the orientation
+- `[TOPOLOGY_CHAIN]`
+- `[TOPOLOGY_COLLINEAR]` - The C++ recalculates stats and updates point ownership here;
+- `[TOPOLOGY_COLLINEAR_MERGE]`
+- `[TOPOLOGY_COLLINEAR_SPLIT]`
+- `[TOPOLOGY_RINGS]`
+- `[TOPOLOGY_TREE]`
+- `[TOPOLOGY_VTXINS]`
+- `[VATTI_END]` - / Log the end of vatti algorithm.
+- `[VATTI_START]` - / Log the start of vatti algorithm.
+- `[WARNING]` - DEBUG: Check if ring actually exists
+- `[WINDING]` - / Log winding count calculation.
+<!-- END AUTO-GENERATED: debug-flags -->
 
 ## Debugging Patterns
 
@@ -95,7 +123,7 @@ Topology correction convergence loops are prone to infinite loops. Pattern:
 2. **Check return value semantics**: C++ may return "was visited" while Rust returns "did something"
 3. **Check data structure operations**: C++ linked-list pointer swaps → Rust Vec splits (not concatenations)
 
-Loop guards exist in `vatti.rs` and `intersect_util.rs` (panic after 100k iterations).
+Loop guards exist in `crates/core/src/vatti.rs` and `crates/core/src/intersect_util.rs` (panic after 100k iterations).
 
 ### C++ Linked-List → Rust Vec Translation
 
@@ -117,6 +145,15 @@ Loop guards exist in `vatti.rs` and `intersect_util.rs` (panic after 100k iterat
 Infrastructure exists in `RingManager` to track and clear merged rings:
 - `mark_as_merged(ring_idx)` - Called during Vatti merge
 - `clear_merged_rings()` - Should be called at topology correction start (currently disabled, see TODO in `correct_topology`)
+
+## Open TODOs
+
+<!-- BEGIN AUTO-GENERATED: todos -->
+**TODOs:**
+- `crates/core/src/build_local_minima_list.rs:383` - (#94): Enable once process_horizontal_right_to_left is fixed
+- `crates/core/src/build_local_minima_list.rs:388` - (#94): Enable once process_horizontal_right_to_left is fixed
+- `crates/core/src/topology_correction.rs:5457` - This test is failing because merge_rings_at_intersection produces
+<!-- END AUTO-GENERATED: todos -->
 
 ## Current Status
 

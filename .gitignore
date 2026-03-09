@@ -32,6 +32,7 @@ mutants.out/
 
 # MkDocs
 site/
+docs/api/  # Auto-generated from rustdoc
 .grepai/
 
 # Worktrees

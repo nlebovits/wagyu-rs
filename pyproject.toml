@@ -1,0 +1,25 @@
+# Python tooling configuration for CI scripts
+# This project is Rust-based; Python is used only for validation/generation scripts
+
+[project]
+name = "wagyu-rs-scripts"
+version = "0.1.0"
+description = "CI and documentation scripts for wagyu-rs"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+    "codespell>=2.4.1",
+    "pre-commit>=4.0.0",
+    "tomli>=2.0.0; python_version < '3.11'",  # TOML parsing fallback
+]
+
+# ---------- spell check ----------
+
+[tool.codespell]
+skip = "*.lock,target/*,.git/*,*.json,*.parquet"
+# Common Rust/geometry terms that might be flagged
+ignore-words-list = "crate,nd,ot"
+
+# ---------- commitizen ----------
+# Note: Main commitizen config is in .cz.toml for Rust compatibility
