@@ -35,6 +35,9 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
+// Define the debug flag referenced by local_minimum_util.hpp
+bool g_lm_debug = false;
+
 using namespace rapidjson;
 using namespace mapbox::geometry::wagyu;
 using T = std::int64_t;
