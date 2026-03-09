@@ -765,7 +765,7 @@ fn correct_tree<T: CoordNum + Copy>(manager: &mut crate::build_result::RingManag
         let (ring_idx, ring_area_val, ref ring_bbox, ring_is_hole) = ring_data[i];
         if crate::debug::debug_enabled() {
             eprintln!(
-                "[CORRECT_TREE] ring {} area={:.0} is_hole={}",
+                "[TOPOLOGY_TREE] ring {} area={:.0} is_hole={}",
                 ring_idx, ring_area_val, ring_is_hole
             );
         }
@@ -1950,7 +1950,7 @@ fn process_collinear_edges_different_rings<T: CoordNum + Copy>(
         let parent_a = manager.get(pt_a.ring_idx).and_then(|r| r.parent());
         let parent_b = manager.get(pt_b.ring_idx).and_then(|r| r.parent());
         eprintln!(
-            "[COLLINEAR_DIFFERENT] ring_a={} ring_b={} parent_a={:?} parent_b={:?}",
+            "[TOPOLOGY_COLLINEAR_MERGE] ring_a={} ring_b={} parent_a={:?} parent_b={:?}",
             pt_a.ring_idx, pt_b.ring_idx, parent_a, parent_b
         );
     }
@@ -2120,7 +2120,7 @@ fn process_collinear_edges<T: CoordNum + Copy>(
     let has_collinear = has_collinear_edge(manager, pt_a, pt_b);
     if crate::debug::debug_enabled() {
         eprintln!(
-            "[PROCESS_COLLINEAR] pt_a.ring={} pt_b.ring={} has_collinear={}",
+            "[TOPOLOGY_COLLINEAR] pt_a.ring={} pt_b.ring={} has_collinear={}",
             pt_a.ring_idx, pt_b.ring_idx, has_collinear
         );
     }
@@ -2132,13 +2132,13 @@ fn process_collinear_edges<T: CoordNum + Copy>(
     // Step 2: Dispatch based on whether they share a ring
     if pt_a.ring_idx == pt_b.ring_idx {
         if crate::debug::debug_enabled() {
-            eprintln!("[PROCESS_COLLINEAR] -> same_ring branch");
+            eprintln!("[TOPOLOGY_COLLINEAR] -> same_ring branch");
         }
         process_collinear_edges_same_ring(manager, pt_a, pt_b);
         true
     } else {
         if crate::debug::debug_enabled() {
-            eprintln!("[PROCESS_COLLINEAR] -> different_rings branch");
+            eprintln!("[TOPOLOGY_COLLINEAR] -> different_rings branch");
         }
         process_collinear_edges_different_rings(manager, pt_a, pt_b);
         true
@@ -2254,16 +2254,7 @@ pub fn correct_collinear_edges<T: CoordNum + Copy>(
     let all_points = build_all_points(manager);
 
     if crate::debug::debug_enabled() {
-        eprintln!("[COLLINEAR_EDGES] all_points count={}", all_points.len());
-        for (pr, coord) in all_points.iter().take(10) {
-            eprintln!(
-                "[COLLINEAR_EDGES]   ring={} idx={} coord=({},{})",
-                pr.ring_idx,
-                pr.point_idx,
-                coord.x.to_f64().unwrap_or(0.0),
-                coord.y.to_f64().unwrap_or(0.0)
-            );
-        }
+        eprintln!("[TOPOLOGY_COLLINEAR] all_points count={}", all_points.len());
     }
 
     if all_points.len() < 2 {
@@ -2294,7 +2285,7 @@ pub fn correct_collinear_edges<T: CoordNum + Copy>(
 
             if crate::debug::debug_enabled() {
                 eprintln!(
-                    "[COLLINEAR_GROUP] coord=({},{}) size={} rings={:?}",
+                    "[TOPOLOGY_COLLINEAR] coord=({},{}) size={} rings={:?}",
                     group_coord.x.to_f64().unwrap_or(0.0),
                     group_coord.y.to_f64().unwrap_or(0.0),
                     group.len(),
@@ -2657,7 +2648,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
         if actual_coord_j != Some(expected_coord) || actual_coord_k != Some(expected_coord) {
             if crate::debug::debug_enabled() {
                 eprintln!(
-                    "[CHAIN_STALE] Skipping stale pair: ring {} idx {} expected {:?} got {:?}, ring {} idx {} expected {:?} got {:?}",
+                    "[TOPOLOGY_CHAIN] Skipping stale pair: ring {} idx {} expected {:?} got {:?}, ring {} idx {} expected {:?} got {:?}",
                     ring_j_idx, pt_j.point_idx, expected_coord, actual_coord_j,
                     ring_k_idx, pt_k.point_idx, expected_coord, actual_coord_k
                 );
@@ -2741,7 +2732,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
 
     if crate::debug::debug_enabled() {
         eprintln!(
-            "[CHAIN_MERGE_CHECK] ring_origin={} ring_search={} origin_is_hole={} search_is_hole={} ring_parent={:?} search_parent={:?}",
+            "[TOPOLOGY_CHAIN] ring_origin={} ring_search={} origin_is_hole={} search_is_hole={} ring_parent={:?} search_parent={:?}",
             ring_origin, ring_search,
             if ring_j_idx == ring_origin { ring_j_is_hole } else { ring_k_is_hole },
             if ring_k_idx == ring_search { ring_k_is_hole } else { ring_j_is_hole },
@@ -2752,7 +2743,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
     if ring_parent_idx != ring_search_parent {
         // Different parents - incompatible, skip
         if crate::debug::debug_enabled() {
-            eprintln!("[CHAIN_MERGE_CHECK] SKIP - different parents");
+            eprintln!("[TOPOLOGY_CHAIN] SKIP - different parents");
         }
         return;
     }
@@ -2855,7 +2846,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
                 ) {
                     if crate::debug::debug_enabled() {
                         eprintln!(
-                            "[CHAIN_MERGE] CHAINED connection found via ring {}",
+                            "[TOPOLOGY_CHAIN] CHAINED connection found via ring {}",
                             it_ring
                         );
                     }
@@ -2884,7 +2875,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
                 .and_then(|r| r.points().get(op_origin_2.1))
                 .copied();
             eprintln!(
-                "[CHAIN_CONNECT] Adding connection: ring {} ({:?}) <-> ring {} ({:?})",
+                "[TOPOLOGY_CHAIN] Adding connection: ring {} ({:?}) <-> ring {} ({:?})",
                 ring_origin, coord1, ring_search, coord2
             );
         }
