@@ -189,5 +189,5 @@ fn xor_shared_edge_preserves_hot_pixel() {
 
     // XOR of adjacent non-overlapping rectangles should merge into one
     // The shared edge points should be handled correctly
-    assert!(result.0.len() >= 1, "XOR should produce at least 1 polygon");
+    assert!(!result.0.is_empty(), "XOR should produce at least 1 polygon");
 }

@@ -1847,15 +1847,11 @@ fn fix_collinear_path<T: CoordNum + Copy>(
             // Keep points from spike_end+1 to spike_start-1
             if is_collinear_with_neighbors {
                 // Remove both duplicate endpoints too
-                for i in (spike_end + 1)..spike_start {
-                    new_points.push(points[i]);
-                }
+                new_points.extend(points[(spike_end + 1)..spike_start].iter().copied());
             } else {
                 // Keep one copy of the duplicate (it's a corner)
                 // Keep spike_end (or spike_start, they're the same coord)
-                for i in spike_end..spike_start {
-                    new_points.push(points[i]);
-                }
+                new_points.extend(points[spike_end..spike_start].iter().copied());
             }
         } else {
             // Non-wrap spike: standard case
@@ -2909,11 +2905,11 @@ fn process_single_intersection<T: CoordNum + Copy>(
 
         connection_map
             .entry(ring_origin)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(pair_origin);
         connection_map
             .entry(ring_search)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(pair_search);
         return;
     }
@@ -2936,7 +2932,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
                 PointPtrPair::new(op_origin_1.0, op_origin_1.1, op_origin_2.0, op_origin_2.1);
             connection_map
                 .entry(ring_origin)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(pair);
         }
         return;
@@ -2954,7 +2950,6 @@ fn process_single_intersection<T: CoordNum + Copy>(
     let mut ring_parent_idx = ring_parent_idx;
     let mut op_origin_1 = op_origin_1;
     let mut op_origin_2 = op_origin_2;
-    let mut i_list = i_list;
 
     if manager.ring_is_hole(ring_origin) {
         // Search for a non-hole in iList to swap with ring_origin
@@ -2968,7 +2963,7 @@ fn process_single_intersection<T: CoordNum + Copy>(
 
         if let Some(idx) = swap_idx {
             // Perform the swap: make the exterior ring the new origin
-            let (ring_itr_idx, mut pair_itr) = i_list[idx].clone();
+            let (ring_itr_idx, mut pair_itr) = i_list[idx];
 
             // Swap op_origin points with this iRing's points
             let op1 = op_origin_1;
@@ -5751,7 +5746,7 @@ mod collinear_edge_tests {
         correct_collinear_edges(&mut manager);
 
         // After correction: ring should be removed (no points) or absent
-        let ring_gone = manager.get(idx).map(|r| r.len() == 0).unwrap_or(true);
+        let ring_gone = manager.get(idx).map(|r| r.is_empty()).unwrap_or(true);
         assert!(
             ring_gone,
             "Fully degenerate (zero-area) ring should be removed after collinear correction"

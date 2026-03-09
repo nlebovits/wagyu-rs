@@ -747,10 +747,10 @@ pub fn intersect_bounds<T: CoordNum>(
             // - Legitimate: merge at (1,1), new ring at (1,1) - ALLOW (same point)
             let b1_cleared_elsewhere = b1
                 .ring_cleared_at
-                .map_or(false, |(x, y)| y == pt.y && x != pt.x);
+                .is_some_and(|(x, y)| y == pt.y && x != pt.x);
             let b2_cleared_elsewhere = b2
                 .ring_cleared_at
-                .map_or(false, |(x, y)| y == pt.y && x != pt.x);
+                .is_some_and(|(x, y)| y == pt.y && x != pt.x);
 
             if b1_cleared_elsewhere || b2_cleared_elsewhere {
                 // Ring was cleared at a different X on this scanline - spurious
