@@ -145,6 +145,14 @@ impl<T: CoordNum> IntersectList<T> {
     pub fn iter(&self) -> impl Iterator<Item = &IntersectNode<T>> {
         self.nodes.iter()
     }
+
+    /// Swap two intersection nodes by their indices.
+    ///
+    /// PORT FROM: C++ `std::iter_swap(node_itr, next_itr)` in intersect_util.hpp
+    /// Used by the adjacency enforcement logic in `process_intersect_list`.
+    pub fn swap(&mut self, a: usize, b: usize) {
+        self.nodes.swap(a, b);
+    }
 }
 
 impl<T: CoordNum + ToPrimitive> IntersectList<T> {

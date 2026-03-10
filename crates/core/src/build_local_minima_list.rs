@@ -179,14 +179,37 @@ fn create_bound_towards_maximum<T: CoordNum>(edges: &mut EdgeList<T>) -> EdgeLis
     }
 
     let mut idx = 0;
+    // PORT FROM: wagyu/include/mapbox/geometry/wagyu/local_minimum_util.hpp lines 112-152
+    // Track if we're in a "y decreasing" segment before a horizontal
+    // This is used to detect local maxima involving horizontal edges
+    let mut y_decreasing_before_last_horizontal = false;
 
     while idx + 1 < edges.len() {
         let edge_is_horizontal = edges[idx].is_horizontal();
         let next_is_horizontal = edges[idx + 1].is_horizontal();
 
-        // Local maximum: both non-horizontal with same top
+        // Case 1: Both non-horizontal with same top = local maximum
         if !edge_is_horizontal && !next_is_horizontal && edges[idx].top == edges[idx + 1].top {
             break;
+        }
+
+        // Case 2: Current is horizontal, next is not
+        // Check if we've reached the maximum via horizontal
+        if !next_is_horizontal && edge_is_horizontal {
+            if y_decreasing_before_last_horizontal
+                && (edges[idx + 1].top == edges[idx].bot || edges[idx + 1].top == edges[idx].top)
+            {
+                break;
+            }
+        }
+        // Case 3: Current is not horizontal, next is horizontal
+        // Set flag if current edge's top connects to the horizontal
+        else if !y_decreasing_before_last_horizontal
+            && !edge_is_horizontal
+            && next_is_horizontal
+            && (edges[idx].top == edges[idx + 1].top || edges[idx].top == edges[idx + 1].bot)
+        {
+            y_decreasing_before_last_horizontal = true;
         }
 
         idx += 1;
