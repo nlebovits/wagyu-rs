@@ -1687,8 +1687,8 @@ mod tests {
 
         // Create 3 bounds: they need to fully reverse order [b0,b1,b2] -> [b2,b1,b0]
         let mut bounds = vec![
-            make_bound((0.0, 0.0), (15.0, 10.0)),  // b0: starts left, goes right
-            make_bound((5.0, 0.0), (5.0, 10.0)),   // b1: vertical middle
+            make_bound((0.0, 0.0), (15.0, 10.0)), // b0: starts left, goes right
+            make_bound((5.0, 0.0), (5.0, 10.0)),  // b1: vertical middle
             make_bound((10.0, 0.0), (-5.0, 10.0)), // b2: starts right, goes left
         ];
 

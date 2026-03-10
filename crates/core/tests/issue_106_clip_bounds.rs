@@ -232,7 +232,10 @@ fn issue_106_two_separate_rectangles_both_preserved() {
         )
         .expect("Intersection should succeed");
 
-    println!("Two separate rectangles result: {} polygon(s)", result.0.len());
+    println!(
+        "Two separate rectangles result: {} polygon(s)",
+        result.0.len()
+    );
     for (i, poly) in result.0.iter().enumerate() {
         let ext = poly.exterior();
         println!("  Polygon {} ({} coords):", i, ext.0.len());
@@ -272,15 +275,15 @@ fn issue_106_minimal_u_shape_direct_coords() {
     // Expected result: two rectangles above y=0
 
     let subject = vec![
-        Point::new(0_i64, -1000),     // bottom-left
-        Point::new(0, 1000),          // top-left outer
-        Point::new(300, 1000),        // top-left inner
-        Point::new(300, -500),        // inside left arm
-        Point::new(700, -500),        // inside bottom
-        Point::new(700, 1000),        // top-right inner
-        Point::new(1000, 1000),       // top-right outer
-        Point::new(1000, -1000),      // bottom-right
-        Point::new(0, -1000),         // close
+        Point::new(0_i64, -1000), // bottom-left
+        Point::new(0, 1000),      // top-left outer
+        Point::new(300, 1000),    // top-left inner
+        Point::new(300, -500),    // inside left arm
+        Point::new(700, -500),    // inside bottom
+        Point::new(700, 1000),    // top-right inner
+        Point::new(1000, 1000),   // top-right outer
+        Point::new(1000, -1000),  // bottom-right
+        Point::new(0, -1000),     // close
     ];
 
     let clip = vec![
@@ -358,11 +361,7 @@ fn issue_106_u_shape_union_for_comparison() {
     wagyu.add_polygon(&vec![clip], PolygonType::Clip);
 
     let result = wagyu
-        .execute(
-            Operation::Union,
-            FillType::EvenOdd,
-            FillType::EvenOdd,
-        )
+        .execute(Operation::Union, FillType::EvenOdd, FillType::EvenOdd)
         .expect("Union should succeed");
 
     println!("Union result: {} polygon(s)", result.0.len());
