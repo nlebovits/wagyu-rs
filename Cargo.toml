@@ -21,7 +21,7 @@ categories = ["science", "algorithms", "mathematics"]
 wagyu-rs = { path = "crates/core", version = "0.2.1" }
 
 # Core geometry
-geo = "0.32"
+geo = "0.33"
 geo-types = "0.7"
 
 # CLI
